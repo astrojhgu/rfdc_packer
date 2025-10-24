@@ -23,24 +23,6 @@ function Vector#(32, Bit#(16)) next_data(Vector#(32, Bit#(16)) x);
     return map(next_datum, x);
 endfunction
 
-typedef struct {
-    Vector#(32, Bit#(16)) value;
-}RfDCFrame deriving(Eq, Bits);
-
-function Fmt disphex(Bit#(16) x);
-    return $format("%x%x ", x[7:0], x[15:8]);
-endfunction
-
-
-instance FShow#(RfDCFrame);
-    function Fmt fshow(RfDCFrame f);
-        Fmt f1=$format();
-        for(Integer i=0;i<32;i=i+1)begin
-            f1=f1+disphex(f.value[i]);
-        end
-        return f1;
-    endfunction
-endinstance
 
 
 

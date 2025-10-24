@@ -19,11 +19,11 @@ module mkTop(Empty);
 
     rule each;
         step_cnt<=step_cnt+1;
-        if(step_cnt==200)$finish;
+        if(step_cnt==260)$finish;
 
         let x<-s_axis.pkg.get();
         RfDCFrame y=unpack(x.data);
-        $display(fshow(y));
+        //$display(fshow(y));
         if(x.last)
         $display("========");
         //$display(step_cnt);

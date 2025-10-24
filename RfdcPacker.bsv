@@ -13,6 +13,27 @@ typedef 8192 PayloadLength;
 Int#(16) payload_length=fromInteger(valueOf(PayloadLength));
 Integer axis_data_width=valueOf(AxisDataWidth);
 
+typedef struct {
+    Vector#(32, Bit#(16)) value;
+}RfDCFrame deriving(Eq, Bits);
+
+function Fmt disphex(Bit#(16) x);
+    return $format("%x%x ", x[7:0], x[15:8]);
+endfunction
+
+
+instance FShow#(RfDCFrame);
+    function Fmt fshow(RfDCFrame f);
+        Fmt f1=$format();
+        for(Integer i=0;i<32;i=i+1)begin
+            f1=f1+disphex(f.value[i]);
+        end
+        return f1;
+    endfunction
+endinstance
+
+
+
 interface RfdcPacker;
      (* prefix="s_axis" *)
     interface AXI4_Stream_Rd_Fab#(AxisDataWidth, 0) s_axis_fab;
@@ -226,6 +247,11 @@ module mkRfdcPacker(RfdcPacker);
                 $display("PktHead1");
                 let d<-s_axis.pkg.get();
                 stage1<=d.data;
+
+                RfDCFrame y=unpack(d.data);
+                //$display("read:",fshow(y));
+                y=unpack({ pack(meta_data)[meta_data_part_1_size-1:0], calc_net_header()});
+                $display("write:",fshow(y));
                 out_fifo.enq(
                     AXI4_Stream_Pkg{
                         data: { pack(meta_data)[meta_data_part_1_size-1:0], calc_net_header()},
@@ -242,9 +268,14 @@ module mkRfdcPacker(RfdcPacker);
                 iter_i<=0;
                 $display("PktHead2");
                 let d<-s_axis.pkg.get;
+                RfDCFrame y=unpack(d.data);
+                //$display("read:",fshow(y));
                 stage2<=d.data;
                 Bit#(MetaDataPart2Size) p1=pack(meta_data)[meta_data_size-1: meta_data_part_1_size];
                 Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage1[axis_data_width-meta_data_part_2_size-1:0 ];
+
+                y=unpack({p2,p1});
+                $display("writ:",fshow(y));
                 out_fifo.enq(
                     AXI4_Stream_Pkg{
                         data: {p2, p1},
@@ -259,11 +290,17 @@ module mkRfdcPacker(RfdcPacker);
             PktBody:begin
                 $display("PktBody", iter_i);
                 iter_i<=iter_i+1;
-                if (iter_i==8'h7e) state<=PktTail;
+                if (iter_i==125) state<=PktTail;
                 if ((iter_i&'h1)==0)begin
+                    let d<-s_axis.pkg.get;
+                    RfDCFrame y=unpack(d.data);
+                    //$display("read:",fshow(y));
+                    stage1<=d.data;
+
                     Bit#(MetaDataPart2Size) p1=stage1[axis_data_width-1: axis_data_width-meta_data_part_2_size];
                     Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage2[axis_data_width-meta_data_part_2_size-1:0 ];
-                    
+                    y=unpack({p2,p1});
+                    $display("writ:", fshow(y));
                     out_fifo.enq(
                     AXI4_Stream_Pkg{
                         data: {p2, p1},
@@ -274,13 +311,18 @@ module mkRfdcPacker(RfdcPacker);
                         last: False
                     }
                     );
-                    let d<-s_axis.pkg.get;
-                    stage1<=d.data;
+                    
                 end
                 else begin
+                    let d<-s_axis.pkg.get;
+                    RfDCFrame y=unpack(d.data);
+                    //$display("read:",fshow(y));
+                    stage2<=d.data;
+
                     Bit#(MetaDataPart2Size) p1=stage2[axis_data_width-1: axis_data_width-meta_data_part_2_size];
                     Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage1[axis_data_width-meta_data_part_2_size-1:0 ];
-                    
+                    y=unpack({p2,p1});
+                    $display("writ:", fshow(y));
                     out_fifo.enq(
                     AXI4_Stream_Pkg{
                         data: {p2, p1},
@@ -292,8 +334,8 @@ module mkRfdcPacker(RfdcPacker);
                     }
                     );
 
-                    let d<-s_axis.pkg.get;
-                    stage2<=d.data;
+                    
+                    
                 end
             end
             PktTail:begin
@@ -301,7 +343,8 @@ module mkRfdcPacker(RfdcPacker);
                 state<=PktLast;
                 Bit#(MetaDataPart2Size) p1=stage1[axis_data_width-1: axis_data_width-meta_data_part_2_size];
                 Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage2[axis_data_width-meta_data_part_2_size-1:0 ];
-                
+                RfDCFrame y=unpack({p2,p1});
+                $display("writ:", fshow(y));
                 out_fifo.enq(
                     AXI4_Stream_Pkg{
                         data: {p2, p1},
@@ -318,7 +361,8 @@ module mkRfdcPacker(RfdcPacker);
                 state<=PktHead1;
                 Bit#(MetaDataPart2Size) p1=stage2[axis_data_width-1: axis_data_width-meta_data_part_2_size];
                 Vector#(27, Bit#(16)) tail=replicate(16'haa55);
-
+                RfDCFrame y=unpack({pack(tail),p1});
+                $display("writ:", fshow(y));
                 out_fifo.enq(
                     AXI4_Stream_Pkg{
                         data: {pack(tail),p1},
@@ -331,7 +375,7 @@ module mkRfdcPacker(RfdcPacker);
                 );
 
                 meta_data.pkt_cnt<=meta_data.pkt_cnt+1;
-                $display("==");
+                $display("=======");
             end
         endcase
     endrule
