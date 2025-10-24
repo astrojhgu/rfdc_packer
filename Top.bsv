@@ -15,6 +15,21 @@ module mkTop(Empty);
 
     mkConnection(fs.m_axis_fab, s_axis.fab);
     Reg#(Int#(32)) i<-mkReg(0);
+    Reg#(UInt#(32)) step_cnt<-mkReg(0);
+
+    rule each;
+        step_cnt<=step_cnt+1;
+        if(step_cnt==200)$finish;
+
+        let x<-s_axis.pkg.get();
+        RfDCFrame y=unpack(x.data);
+        $display(fshow(y));
+        if(x.last)
+        $display("========");
+        //$display(step_cnt);
+    endrule
+
+    /*
     mkAutoFSM(
         seq
             // action
@@ -44,5 +59,6 @@ module mkTop(Empty);
                 $display($format("%x", md==compose_metadata(64'h123456)));
             endaction
         endseq
-    );    
+    );
+    */
 endmodule

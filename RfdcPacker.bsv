@@ -6,6 +6,7 @@ import GetPut::*;
 import Vector::*;
 import BlueUtils::*;
 import StmtFSM::*;
+import Probe::*;
 
 typedef 512 AxisDataWidth;
 typedef 8192 PayloadLength;
@@ -97,12 +98,6 @@ function Bit#(64) udp_hdr(Bit#(16) dst_port, Bit#(16) src_port, UInt#(16) payloa
     };
 endfunction
 
-typedef enum{
-    Header,
-    Tail,
-    Body
-}SubFrameType deriving(Eq, Bits, FShow);
-
 
 typedef struct{
     Bit#(32) head_magic;
@@ -165,6 +160,14 @@ Integer meta_data_part_1_size=valueOf(MetaDataPart1Size);
 Integer meta_data_part_2_size=valueOf(MetaDataPart2Size);
 Integer meta_data_size=valueOf(MetaDataSize);
 
+typedef enum{
+    PktHead1,
+    PktHead2,
+    PktBody,
+    PktTail,
+    PktLast
+}PktState deriving(Eq, Bits, FShow);
+
 (*synthesize*)
 module mkRfdcPacker(RfdcPacker);
     AXI4_Stream_Rd#(AxisDataWidth, 0) s_axis<-mkAXI4_Stream_Rd(2);
@@ -198,14 +201,15 @@ module mkRfdcPacker(RfdcPacker);
     
     //Reg#(Bit#(64)) cnt<-mkReg(0);
     Reg#(MetaData) meta_data<-mkReg(compose_metadata(0));
-    Reg#(UInt#(8)) iter_i<-mkReg(0);
+    Reg#(Bit#(8)) iter_i<-mkReg(0);
+    Reg#(PktState) state<-mkReg(PktHead1);
 
     Reg#(Bit#(16)) sub_frame_cnt<-mkReg(0);
 
     Reg#(Bit#(400)) header_buffer<-mkReg(0);
 
     FIFO#(AXI4_Stream_Pkg#(AxisDataWidth, 0)) out_fifo<-mkSizedFIFO(2);
-
+    //Probe#(PktState) state_probe<-mkProbe;
 
     function Bit#(336) calc_net_header();
         return {
@@ -215,12 +219,12 @@ module mkRfdcPacker(RfdcPacker);
         };
     endfunction
 
-    
-
-    Stmt transfer=
-        seq
-            action            
-                let d<-s_axis.pkg.get;
+    rule each;
+        case (state)
+            PktHead1:begin
+                state<=PktHead2;
+                $display("PktHead1");
+                let d<-s_axis.pkg.get();
                 stage1<=d.data;
                 out_fifo.enq(
                     AXI4_Stream_Pkg{
@@ -232,15 +236,15 @@ module mkRfdcPacker(RfdcPacker);
                         last: False
                     }
                 );
-            endaction
-
-            action            
+            end
+            PktHead2:begin
+                state<=PktBody;
+                iter_i<=0;
+                $display("PktHead2");
                 let d<-s_axis.pkg.get;
                 stage2<=d.data;
                 Bit#(MetaDataPart2Size) p1=pack(meta_data)[meta_data_size-1: meta_data_part_1_size];
                 Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage1[axis_data_width-meta_data_part_2_size-1:0 ];
-                
-
                 out_fifo.enq(
                     AXI4_Stream_Pkg{
                         data: {p2, p1},
@@ -251,12 +255,12 @@ module mkRfdcPacker(RfdcPacker);
                         last: False
                     }
                 );
-            endaction
-
-            for(iter_i<=0;iter_i<63;iter_i<=iter_i+1)
-            seq
-                action
-                    $display(iter_i);
+            end
+            PktBody:begin
+                $display("PktBody", iter_i);
+                iter_i<=iter_i+1;
+                if (iter_i==8'h7e) state<=PktTail;
+                if ((iter_i&'h1)==0)begin
                     Bit#(MetaDataPart2Size) p1=stage1[axis_data_width-1: axis_data_width-meta_data_part_2_size];
                     Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage2[axis_data_width-meta_data_part_2_size-1:0 ];
                     
@@ -270,12 +274,10 @@ module mkRfdcPacker(RfdcPacker);
                         last: False
                     }
                     );
-
-
                     let d<-s_axis.pkg.get;
                     stage1<=d.data;
-                endaction
-                action
+                end
+                else begin
                     Bit#(MetaDataPart2Size) p1=stage2[axis_data_width-1: axis_data_width-meta_data_part_2_size];
                     Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage1[axis_data_width-meta_data_part_2_size-1:0 ];
                     
@@ -292,11 +294,11 @@ module mkRfdcPacker(RfdcPacker);
 
                     let d<-s_axis.pkg.get;
                     stage2<=d.data;
-                endaction
-            endseq
-
-            action
-                $display("last");
+                end
+            end
+            PktTail:begin
+                $display("PktTail");
+                state<=PktLast;
                 Bit#(MetaDataPart2Size) p1=stage1[axis_data_width-1: axis_data_width-meta_data_part_2_size];
                 Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage2[axis_data_width-meta_data_part_2_size-1:0 ];
                 
@@ -310,8 +312,10 @@ module mkRfdcPacker(RfdcPacker);
                         last: False
                     }
                 );
-            endaction
-            action
+            end
+            PktLast:begin
+                $display("PktLast");
+                state<=PktHead1;
                 Bit#(MetaDataPart2Size) p1=stage2[axis_data_width-1: axis_data_width-meta_data_part_2_size];
                 Vector#(27, Bit#(16)) tail=replicate(16'haa55);
 
@@ -328,17 +332,9 @@ module mkRfdcPacker(RfdcPacker);
 
                 meta_data.pkt_cnt<=meta_data.pkt_cnt+1;
                 $display("==");
-            endaction            
-        endseq;
-
-    mkAutoFSM(
-        seq
-            while(True)transfer;
-        endseq
-    );
-
-    Reg#(Bit#(8)) a<-mkReg(0);
-    Reg#(Bit#(8)) b<-mkReg(0);
+            end
+        endcase
+    endrule
 
 
     interface AXI4_Stream_Rd_Fab s_axis_fab=s_axis.fab;
