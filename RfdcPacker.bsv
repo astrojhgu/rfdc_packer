@@ -167,7 +167,7 @@ Integer meta_data_size=valueOf(MetaDataSize);
 
 (*synthesize*)
 module mkRfdcPacker(RfdcPacker);
-    AXI4_Stream_Rd#(AxisDataWidth, 0) s_axis<-mkAXI4_Stream_Rd(1);
+    AXI4_Stream_Rd#(AxisDataWidth, 0) s_axis<-mkAXI4_Stream_Rd(2);
 
     Reg#(Bit#(AxisDataWidth)) stage1<-mkReg(0);
     Reg#(Bit#(AxisDataWidth)) stage2<-mkReg(0);
@@ -204,7 +204,7 @@ module mkRfdcPacker(RfdcPacker);
 
     Reg#(Bit#(400)) header_buffer<-mkReg(0);
 
-    FIFO#(AXI4_Stream_Pkg#(AxisDataWidth, 0)) out_fifo<-mkSizedFIFO(1);
+    FIFO#(AXI4_Stream_Pkg#(AxisDataWidth, 0)) out_fifo<-mkSizedFIFO(2);
 
 
     function Bit#(336) calc_net_header();
@@ -330,7 +330,7 @@ module mkRfdcPacker(RfdcPacker);
                 $display("==");
             endaction            
         endseq;
-        
+
     mkAutoFSM(
         seq
             while(True)transfer;
