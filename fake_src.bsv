@@ -4,6 +4,8 @@ import GetPut::*;
 import Vector::*;
 import BlueUtils::*;
 import StmtFSM::*;
+import RfdcPacker::*;
+import Connectable::*;
 
 typedef 512 AxisDataWidth;
 typedef 8192 PayloadLength;
@@ -41,18 +43,21 @@ instance FShow#(RfDCFrame);
 endinstance
 
 
+
 interface FakeSrc;
     (* prefix="m_axis" *)
     interface AXI4_Stream_Wr_Fab#(AxisDataWidth, 0) m_axis_fab;
 endinterface
 
+
+(*synthesize*)
 module mkFakeSrc(FakeSrc);
-    AXI4_Stream_Wr#(512, 0) maxis<-mkAXI4_Stream_Wr(1);
+    AXI4_Stream_Wr#(512, 0) m_axis<-mkAXI4_Stream_Wr(1);
     Reg#(Int#(32)) i<-mkReg(0);
     Reg#(Vector#(32, Bit#(16))) data<-mkReg(genWith(gen_data));
 
     rule each;
-        maxis.pkg.put(AXI4_Stream_Pkg{
+        m_axis.pkg.put(AXI4_Stream_Pkg{
             data:pack(data), 
             keep:64'hffff_ffff_ffff_ffff,
             dest: 0,
@@ -61,5 +66,36 @@ module mkFakeSrc(FakeSrc);
         });
         data<=next_data(data);
     endrule
-    interface AXI4_Stream_Wr_Fab m_axis_fab=maxis.fab;
+    interface AXI4_Stream_Wr_Fab m_axis_fab=m_axis.fab;
+endmodule
+
+
+(*synthesize*)
+module mkFakeSrcWithHdr(FakeSrc);
+    FakeSrc fs<-mkFakeSrc;
+    RfdcPacker packer<-mkRfdcPacker;
+
+    AXI4_Stream_Wr#(AxisDataWidth, 0) m_axis<-mkAXI4_Stream_Wr(1);
+
+    Reg#(Bool) configured<-mkReg(False);
+
+    mkConnection(fs.m_axis_fab, packer.s_axis_fab);
+
+    rule cfg(!configured);
+        packer.set_dst_mac('h10_70_fd_b3_68_de);
+        packer.set_src_mac('h10_70_fd_b3_70_df);
+        packer.set_dst_ip('h0a_64_0b_01);
+        packer.set_src_ip('h0a_64_0b_10);
+        packer.set_dst_port('h1122);
+        packer.set_src_port('h1122);
+        configured<=True;
+    endrule
+
+    rule each(configured);
+        let a<-packer.get.get();
+        m_axis.pkg.put(a);
+    endrule
+
+
+    interface AXI4_Stream_Wr_Fab m_axis_fab=m_axis.fab;
 endmodule

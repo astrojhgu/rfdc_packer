@@ -16,7 +16,7 @@ interface RfdcPacker;
      (* prefix="s_axis" *)
     interface AXI4_Stream_Rd_Fab#(AxisDataWidth, 0) s_axis_fab;
 
-    interface Get#(Bit#(AxisDataWidth)) get;
+    interface Get#(AXI4_Stream_Pkg#(AxisDataWidth, 0)) get;
     
     method Action set_src_mac(Bit#(48) v);
     method Action set_dst_mac(Bit#(48) v);
@@ -204,7 +204,7 @@ module mkRfdcPacker(RfdcPacker);
 
     Reg#(Bit#(400)) header_buffer<-mkReg(0);
 
-    FIFO#(Bit#(AxisDataWidth)) out_fifo<-mkSizedFIFO(1);
+    FIFO#(AXI4_Stream_Pkg#(AxisDataWidth, 0)) out_fifo<-mkSizedFIFO(1);
 
 
     function Bit#(336) calc_net_header();
@@ -222,7 +222,16 @@ module mkRfdcPacker(RfdcPacker);
             action            
                 let d<-s_axis.pkg.get;
                 stage1<=d.data;
-                out_fifo.enq({ pack(meta_data)[meta_data_part_1_size-1:0], calc_net_header()});
+                out_fifo.enq(
+                    AXI4_Stream_Pkg{
+                        data: { pack(meta_data)[meta_data_part_1_size-1:0], calc_net_header()},
+                        user: 0, 
+                        keep: 64'hffff_ffff_ffff_ffff,
+                        dest: 0,
+                        id: 0,
+                        last: False
+                    }
+                );
             endaction
 
             action            
@@ -230,44 +239,98 @@ module mkRfdcPacker(RfdcPacker);
                 stage2<=d.data;
                 Bit#(MetaDataPart2Size) p1=pack(meta_data)[meta_data_size-1: meta_data_part_1_size];
                 Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage1[axis_data_width-meta_data_part_2_size-1:0 ];
-                out_fifo.enq({ p2, p1});
+                
+
+                out_fifo.enq(
+                    AXI4_Stream_Pkg{
+                        data: {p2, p1},
+                        user: 0, 
+                        keep: 64'hffff_ffff_ffff_ffff,
+                        dest: 0,
+                        id: 0,
+                        last: False
+                    }
+                );
             endaction
 
             for(iter_i<=0;iter_i<63;iter_i<=iter_i+1)
             seq
-                $display(iter_i);
                 action
+                    $display(iter_i);
                     Bit#(MetaDataPart2Size) p1=stage1[axis_data_width-1: axis_data_width-meta_data_part_2_size];
                     Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage2[axis_data_width-meta_data_part_2_size-1:0 ];
-                    out_fifo.enq({p2,p1});
+                    
+                    out_fifo.enq(
+                    AXI4_Stream_Pkg{
+                        data: {p2, p1},
+                        user: 0, 
+                        keep: 64'hffff_ffff_ffff_ffff,
+                        dest: 0,
+                        id: 0,
+                        last: False
+                    }
+                    );
+
+
                     let d<-s_axis.pkg.get;
                     stage1<=d.data;
                 endaction
                 action
                     Bit#(MetaDataPart2Size) p1=stage2[axis_data_width-1: axis_data_width-meta_data_part_2_size];
                     Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage1[axis_data_width-meta_data_part_2_size-1:0 ];
-                    out_fifo.enq({p2,p1});
+                    
+                    out_fifo.enq(
+                    AXI4_Stream_Pkg{
+                        data: {p2, p1},
+                        user: 0, 
+                        keep: 64'hffff_ffff_ffff_ffff,
+                        dest: 0,
+                        id: 0,
+                        last: False
+                    }
+                    );
+
                     let d<-s_axis.pkg.get;
                     stage2<=d.data;
                 endaction
             endseq
-            $display("last");
 
             action
+                $display("last");
                 Bit#(MetaDataPart2Size) p1=stage1[axis_data_width-1: axis_data_width-meta_data_part_2_size];
                 Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage2[axis_data_width-meta_data_part_2_size-1:0 ];
-                out_fifo.enq({p2,p1});
+                
+                out_fifo.enq(
+                    AXI4_Stream_Pkg{
+                        data: {p2, p1},
+                        user: 0, 
+                        keep: 64'hffff_ffff_ffff_ffff,
+                        dest: 0,
+                        id: 0,
+                        last: False
+                    }
+                );
             endaction
             action
                 Bit#(MetaDataPart2Size) p1=stage2[axis_data_width-1: axis_data_width-meta_data_part_2_size];
                 Vector#(27, Bit#(16)) tail=replicate(16'haa55);
-                out_fifo.enq({pack(tail),p1});
+
+                out_fifo.enq(
+                    AXI4_Stream_Pkg{
+                        data: {pack(tail),p1},
+                        user: 0, 
+                        keep: 64'hffff_ffff_ffff_ffff,
+                        dest: 0,
+                        id: 0,
+                        last: True
+                    }
+                );
+
                 meta_data.pkt_cnt<=meta_data.pkt_cnt+1;
-            endaction
-            $display("==");
+                $display("==");
+            endaction            
         endseq;
-
-
+        
     mkAutoFSM(
         seq
             while(True)transfer;
