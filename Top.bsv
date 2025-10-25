@@ -7,7 +7,7 @@ import GetPut::*;
 import Connectable::*;
 import StmtFSM::*;
 import FakeSrc::*;
-
+import AXISink::*;
 
 
 
