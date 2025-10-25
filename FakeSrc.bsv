@@ -99,14 +99,14 @@ module mkFakeSrcWithHdr2(FakeSrc);
 
     RfdcPackerN#(2) packers<-mkRfdcPackerN;
 
-    AXI4_Stream_Rd#(512,0) s_axis<-mkAXI4_Stream_Rd(2);
+    //AXI4_Stream_Rd#(512,0) s_axis<-mkAXI4_Stream_Rd(2);
 
     Reg#(Bool) configured<-mkReg(False);
 
     //mkConnection(fs.m_axis_fab, s_axis.fab);
     mkConnection(axi4_lite_wr.fab, packers.s_axi_wr_fab);
     mkConnection(axi4_lite_rd.fab, packers.s_axi_rd_fab);
-    mkConnection(packers.m_axis_fab,s_axis.fab);
+    //mkConnection(packers.m_axis_fab,s_axis.fab);
 
     function Stmt config_packer(Bit#(3) sel, Bit#(8) addr, Bit#(32) value);
         return seq

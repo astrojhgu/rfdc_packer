@@ -87,14 +87,52 @@ endfunction
 
 
 typedef Bit#(160) IPv4Hdr;
-function IPv4Hdr ipv4_hdr(Bit#(32) dst_ip, Bit#(32) src_ip);
-    Bit#(160) unchedked={
+// function IPv4Hdr ipv4_hdr(Bit#(32) dst_ip, Bit#(32) src_ip);
+//     Bit#(160) unchecked={
+//         //[159:128]
+//         //dst_ip[7:0],dst_ip[15:8],dst_ip[23:16],dst_ip[31:24],
+//         toggle_endianness(dst_ip)
+//         //[127:96]
+//         //src_ip[7:0],src_ip[15:8],src_ip[23:16],src_ip[31:24],
+//         ,toggle_endianness(src_ip)
+//         //[95:64]
+//         ,16'h0 //checksum
+//         ,8'd17 //udp
+//         ,8'hff//ttl
+
+//         //[63:32]
+//         ,16'b0000_0000_010_00000 //flags+fragment offset
+//         ,16'h0 //identification
+
+
+//         //31:0
+//         ,toggle_endianness(pack((payload_length+8+20)))
+//         ,8'h00//dscp+ecn
+//         ,8'h45//version+ihl
+//     };
+//     Vector#(10, UInt#(16)) to_check=unpack(unchecked);
+//     Bit#(20) r=pack(foldl(add16, 0, to_check));
+//     //return unchecked;
+//     Bit#(20) checksum1=extend(r[19:16])+extend(r[15:0]);
+//     Bit#(16) checksum= ~(extend(checksum1[19:16])+extend(checksum1[15:0]));
+//     return {unchecked[159:96], pack(checksum), unchecked[79:0]};
+// endfunction
+
+interface IPv4HdrCheckSum;
+    method Action put(Bit#(32) dst_ip, Bit#(32) src_ip);
+    method Bit#(160) get;
+endinterface
+
+module mkIPv4HdrCheckSum(IPv4HdrCheckSum);
+    Reg#(Bit#(32)) dst_ip_<-mkReg(0);
+    Reg#(Bit#(32)) src_ip_<-mkReg(0);
+    Bit#(160) unchecked={
         //[159:128]
         //dst_ip[7:0],dst_ip[15:8],dst_ip[23:16],dst_ip[31:24],
-        toggle_endianness(dst_ip)
+        toggle_endianness(dst_ip_)
         //[127:96]
         //src_ip[7:0],src_ip[15:8],src_ip[23:16],src_ip[31:24],
-        ,toggle_endianness(src_ip)
+        ,toggle_endianness(src_ip_)
         //[95:64]
         ,16'h0 //checksum
         ,8'd17 //udp
@@ -110,13 +148,32 @@ function IPv4Hdr ipv4_hdr(Bit#(32) dst_ip, Bit#(32) src_ip);
         ,8'h00//dscp+ecn
         ,8'h45//version+ihl
     };
-    Vector#(10, UInt#(16)) to_check=unpack(unchedked);
-    Bit#(20) r=pack(foldl(add16, 0, to_check));
-    //return unchedked;
-    Bit#(20) checksum1=extend(r[19:16])+extend(r[15:0]);
-    Bit#(16) checksum= ~(extend(checksum1[19:16])+extend(checksum1[15:0]));
-    return {unchedked[159:96], pack(checksum), unchedked[79:0]};
-endfunction
+    Vector#(10, Bit#(16)) to_check=unpack(unchecked);
+    Reg#(Bit#(20)) r <-mkReg(0);
+    Reg#(Bit#(20)) checksum1<-mkReg(0);
+    Reg#(Bit#(16)) checksum<-mkReg(0);
+    Bit#(160) result={unchecked[159:96], pack(checksum), unchecked[79:0]};
+
+    Reg#(UInt#(8)) i<-mkReg(0);
+
+    FSM fsm <-mkFSM(
+        seq
+            r<=0;
+            for(i<=0;i!=10;i<=i+1)action
+                r<=r+extend(to_check[i]);
+            endaction
+            checksum1<=extend(r[19:16])+extend(r[15:0]);
+            checksum<=~(extend(checksum1[19:16])+extend(checksum1[15:0]));
+        endseq
+    );
+
+    method Action put(Bit#(32) dst_ip, Bit#(32) src_ip) if (fsm.done());
+        dst_ip_<=dst_ip;
+        src_ip_<=src_ip;
+        fsm.start();
+    endmethod
+    method Bit#(160) get if(fsm.done())=result;
+endmodule
 
 typedef Bit#(64) UDPHdr;
 function Bit#(64) udp_hdr(Bit#(16) dst_port, Bit#(16) src_port, UInt#(16) payload_length1);
@@ -228,8 +285,7 @@ module mkRfdcPacker(RfdcPacker);
     Bit#(8) src_port_addr=8'h1c;
     Reg#(Bit#(16)) src_port<-mkReg(0);
 
-    Reg#(Bit#(336)) net_header<-mkReg(0);
-
+    
     
     //Reg#(Bit#(64)) cnt<-mkReg(0);
     Reg#(MetaData) meta_data<-mkReg(compose_metadata(0));
@@ -244,21 +300,31 @@ module mkRfdcPacker(RfdcPacker);
 
     Reg#(Bool) configured_<-mkReg(False);
     Reg#(Bool) old_configured_<-mkReg(False);
-    //Probe#(PktState) state_probe<-mkProbe;
+    Reg#(Bool) ipv4_hdr_updated<-mkReg(False);
 
-    function Bit#(336) calc_net_header();
-        return {
-            udp_hdr(dst_port,src_port,fromInteger(valueOf(PayloadLength))),
-            ipv4_hdr(dst_ip, src_ip),
-            eth_hdr(dst_mac, src_mac)
-        };
-    endfunction
+    //Probe#(PktState) state_probe<-mkProbe;
+    Reg#(IPv4Hdr) ipv4_hdr<-mkReg(0);
+    Bit#(336) net_header={
+        udp_hdr(dst_port,src_port,fromInteger(valueOf(PayloadLength))),
+        ipv4_hdr,
+        eth_hdr(dst_mac, src_mac)
+    };
+    
+    IPv4HdrCheckSum ipv4_checksum<-mkIPv4HdrCheckSum;
 
     rule each;
         old_configured_<=configured_;
         if(!old_configured_) begin
             meta_data.pkt_cnt<=0;
-            net_header<=calc_net_header();
+            //net_header<=calc_net_header();
+            //ipv4_hdr<=ipv4_checksum.get;
+            ipv4_checksum.put(dst_ip, src_ip);
+            ipv4_hdr_updated<=False;
+        end
+        else if(!ipv4_hdr_updated)
+        begin
+            ipv4_hdr<=ipv4_checksum.get;
+            ipv4_hdr_updated<=True;
         end
         else
         begin
