@@ -4,7 +4,7 @@ import Vector::*;
 import GetPut::*;
 import Connectable::*;
 import StmtFSM::*;
-import fake_src::*;
+import FakeSrc::*;
 
 
 
