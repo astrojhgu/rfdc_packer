@@ -10,8 +10,14 @@ import Probe::*;
 
 typedef 512 AxisDataWidth;
 typedef 8192 PayloadLength;
+typedef 32 AxiLiteDataWidth;
+typedef 11 AxiLiteAddrWidth;
+
+
 Int#(16) payload_length=fromInteger(valueOf(PayloadLength));
 Integer axis_data_width=valueOf(AxisDataWidth);
+Integer axi_lite_data_width=valueOf(AxiLiteDataWidth);
+Integer axi_lite_addr_width=valueOf(AxiLiteAddrWidth);
 
 typedef struct {
     Vector#(32, Bit#(16)) value;
@@ -57,6 +63,9 @@ interface RfdcPacker;
     method Bit#(16) get_dst_port();
 
     method Bit#(32) get_reg(Bit#(8) addr);
+
+    //(*always_enabled, always_ready*)
+    method Action configured(Bit#(1) v);
 endinterface
 
 typedef Bit#(112) EtherHdr;
@@ -199,12 +208,12 @@ module mkRfdcPacker(RfdcPacker);
     Reg#(Bool) phase <-mkReg(False);
 
     
-    Bit#(8) dst_mac_addr_lo_16=8'h00;
-    Bit#(8) dst_mac_addr_hi_32=8'h04;
+    Bit#(8) dst_mac_addr_hi_32=8'h00;
+    Bit#(8) dst_mac_addr_lo_16=8'h04;
     Reg#(Bit#(48)) dst_mac<-mkReg(0);
 
-    Bit#(8) src_mac_addr_lo_16=8'h08;
-    Bit#(8) src_mac_addr_hi_32=8'h0c;
+    Bit#(8) src_mac_addr_hi_32=8'h08;
+    Bit#(8) src_mac_addr_lo_16=8'h0c;
     Reg#(Bit#(48)) src_mac<-mkReg(0);
     
     Bit#(8) dst_ip_addr=8'h10;
@@ -230,6 +239,9 @@ module mkRfdcPacker(RfdcPacker);
     Reg#(Bit#(400)) header_buffer<-mkReg(0);
 
     FIFO#(AXI4_Stream_Pkg#(AxisDataWidth, 0)) out_fifo<-mkSizedFIFO(2);
+
+    Reg#(Bool) configured_<-mkReg(False);
+    Reg#(Bool) old_configured_<-mkReg(False);
     //Probe#(PktState) state_probe<-mkProbe;
 
     function Bit#(336) calc_net_header();
@@ -241,149 +253,153 @@ module mkRfdcPacker(RfdcPacker);
     endfunction
 
     rule each;
-        case (state)
-            PktHead1:begin
-                state<=PktHead2;
-                $display("PktHead1");
-                let d<-s_axis.pkg.get();
-                stage1<=d.data;
-
-                RfDCFrame y=unpack(d.data);
-                //$display("read:",fshow(y));
-                y=unpack({ pack(meta_data)[meta_data_part_1_size-1:0], calc_net_header()});
-                $display("write:",fshow(y));
-                out_fifo.enq(
-                    AXI4_Stream_Pkg{
-                        data: { pack(meta_data)[meta_data_part_1_size-1:0], calc_net_header()},
-                        user: 0, 
-                        keep: 64'hffff_ffff_ffff_ffff,
-                        dest: 0,
-                        id: 0,
-                        last: False
-                    }
-                );
-            end
-            PktHead2:begin
-                state<=PktBody;
-                iter_i<=0;
-                $display("PktHead2");
-                let d<-s_axis.pkg.get;
-                RfDCFrame y=unpack(d.data);
-                //$display("read:",fshow(y));
-                stage2<=d.data;
-                Bit#(MetaDataPart2Size) p1=pack(meta_data)[meta_data_size-1: meta_data_part_1_size];
-                Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage1[axis_data_width-meta_data_part_2_size-1:0 ];
-
-                y=unpack({p2,p1});
-                $display("writ:",fshow(y));
-                out_fifo.enq(
-                    AXI4_Stream_Pkg{
-                        data: {p2, p1},
-                        user: 0, 
-                        keep: 64'hffff_ffff_ffff_ffff,
-                        dest: 0,
-                        id: 0,
-                        last: False
-                    }
-                );
-            end
-            PktBody:begin
-                $display("PktBody", iter_i);
-                iter_i<=iter_i+1;
-                if (iter_i==125) state<=PktTail;
-                if ((iter_i&'h1)==0)begin
-                    let d<-s_axis.pkg.get;
-                    RfDCFrame y=unpack(d.data);
-                    //$display("read:",fshow(y));
+        old_configured_<=configured_;
+        if(!old_configured_) meta_data.pkt_cnt<=0;
+        else
+        begin
+            case (state)
+                PktHead1:begin
+                    state<=PktHead2;
+                    //$display("PktHead1");
+                    let d<-s_axis.pkg.get();
                     stage1<=d.data;
 
-                    Bit#(MetaDataPart2Size) p1=stage1[axis_data_width-1: axis_data_width-meta_data_part_2_size];
-                    Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage2[axis_data_width-meta_data_part_2_size-1:0 ];
-                    y=unpack({p2,p1});
-                    $display("writ:", fshow(y));
+                    RfDCFrame y=unpack(d.data);
+                    //$display("read:",fshow(y));
+                    y=unpack({ pack(meta_data)[meta_data_part_1_size-1:0], calc_net_header()});
+                    //$display("write:",fshow(y));
                     out_fifo.enq(
-                    AXI4_Stream_Pkg{
-                        data: {p2, p1},
-                        user: 0, 
-                        keep: 64'hffff_ffff_ffff_ffff,
-                        dest: 0,
-                        id: 0,
-                        last: False
-                    }
+                        AXI4_Stream_Pkg{
+                            data: { pack(meta_data)[meta_data_part_1_size-1:0], calc_net_header()},
+                            user: 0, 
+                            keep: 64'hffff_ffff_ffff_ffff,
+                            dest: 0,
+                            id: 0,
+                            last: False
+                        }
                     );
-                    
                 end
-                else begin
+                PktHead2:begin
+                    state<=PktBody;
+                    iter_i<=0;
+                    //$display("PktHead2");
                     let d<-s_axis.pkg.get;
                     RfDCFrame y=unpack(d.data);
                     //$display("read:",fshow(y));
                     stage2<=d.data;
-
-                    Bit#(MetaDataPart2Size) p1=stage2[axis_data_width-1: axis_data_width-meta_data_part_2_size];
+                    Bit#(MetaDataPart2Size) p1=pack(meta_data)[meta_data_size-1: meta_data_part_1_size];
                     Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage1[axis_data_width-meta_data_part_2_size-1:0 ];
+
                     y=unpack({p2,p1});
-                    $display("writ:", fshow(y));
+                    //$display("writ:",fshow(y));
                     out_fifo.enq(
-                    AXI4_Stream_Pkg{
-                        data: {p2, p1},
-                        user: 0, 
-                        keep: 64'hffff_ffff_ffff_ffff,
-                        dest: 0,
-                        id: 0,
-                        last: False
-                    }
+                        AXI4_Stream_Pkg{
+                            data: {p2, p1},
+                            user: 0, 
+                            keep: 64'hffff_ffff_ffff_ffff,
+                            dest: 0,
+                            id: 0,
+                            last: False
+                        }
+                    );
+                end
+                PktBody:begin
+                    //$display("PktBody", iter_i);
+                    iter_i<=iter_i+1;
+                    if (iter_i==125) state<=PktTail;
+                    if ((iter_i&'h1)==0)begin
+                        let d<-s_axis.pkg.get;
+                        RfDCFrame y=unpack(d.data);
+                        //$display("read:",fshow(y));
+                        stage1<=d.data;
+
+                        Bit#(MetaDataPart2Size) p1=stage1[axis_data_width-1: axis_data_width-meta_data_part_2_size];
+                        Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage2[axis_data_width-meta_data_part_2_size-1:0 ];
+                        y=unpack({p2,p1});
+                        //$display("writ:", fshow(y));
+                        out_fifo.enq(
+                        AXI4_Stream_Pkg{
+                            data: {p2, p1},
+                            user: 0, 
+                            keep: 64'hffff_ffff_ffff_ffff,
+                            dest: 0,
+                            id: 0,
+                            last: False
+                        }
+                        );
+                        
+                    end
+                    else begin
+                        let d<-s_axis.pkg.get;
+                        RfDCFrame y=unpack(d.data);
+                        //$display("read:",fshow(y));
+                        stage2<=d.data;
+
+                        Bit#(MetaDataPart2Size) p1=stage2[axis_data_width-1: axis_data_width-meta_data_part_2_size];
+                        Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage1[axis_data_width-meta_data_part_2_size-1:0 ];
+                        y=unpack({p2,p1});
+                        //$display("writ:", fshow(y));
+                        out_fifo.enq(
+                        AXI4_Stream_Pkg{
+                            data: {p2, p1},
+                            user: 0, 
+                            keep: 64'hffff_ffff_ffff_ffff,
+                            dest: 0,
+                            id: 0,
+                            last: False
+                        }
+                        );
+
+                        
+                        
+                    end
+                end
+                PktTail:begin
+                    //$display("PktTail");
+                    state<=PktLast;
+                    Bit#(MetaDataPart2Size) p1=stage1[axis_data_width-1: axis_data_width-meta_data_part_2_size];
+                    Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage2[axis_data_width-meta_data_part_2_size-1:0 ];
+                    RfDCFrame y=unpack({p2,p1});
+                    //$display("writ:", fshow(y));
+                    out_fifo.enq(
+                        AXI4_Stream_Pkg{
+                            data: {p2, p1},
+                            user: 0, 
+                            keep: 64'hffff_ffff_ffff_ffff,
+                            dest: 0,
+                            id: 0,
+                            last: False
+                        }
+                    );
+                end
+                PktLast:begin
+                    //$display("PktLast");
+                    state<=PktHead1;
+                    Bit#(MetaDataPart2Size) p1=stage2[axis_data_width-1: axis_data_width-meta_data_part_2_size];
+                    Vector#(27, Bit#(16)) tail=replicate(16'haa55);
+                    RfDCFrame y=unpack({pack(tail),p1});
+                    //$display("writ:", fshow(y));
+                    out_fifo.enq(
+                        AXI4_Stream_Pkg{
+                            data: {pack(tail),p1},
+                            user: 0, 
+                            keep: 64'hffff_ffff_ffff_ffff,
+                            dest: 0,
+                            id: 0,
+                            last: True
+                        }
                     );
 
-                    
-                    
+                    meta_data.pkt_cnt<=meta_data.pkt_cnt+1;
                 end
-            end
-            PktTail:begin
-                $display("PktTail");
-                state<=PktLast;
-                Bit#(MetaDataPart2Size) p1=stage1[axis_data_width-1: axis_data_width-meta_data_part_2_size];
-                Bit#(TSub#(AxisDataWidth, MetaDataPart2Size)) p2=stage2[axis_data_width-meta_data_part_2_size-1:0 ];
-                RfDCFrame y=unpack({p2,p1});
-                $display("writ:", fshow(y));
-                out_fifo.enq(
-                    AXI4_Stream_Pkg{
-                        data: {p2, p1},
-                        user: 0, 
-                        keep: 64'hffff_ffff_ffff_ffff,
-                        dest: 0,
-                        id: 0,
-                        last: False
-                    }
-                );
-            end
-            PktLast:begin
-                $display("PktLast");
-                state<=PktHead1;
-                Bit#(MetaDataPart2Size) p1=stage2[axis_data_width-1: axis_data_width-meta_data_part_2_size];
-                Vector#(27, Bit#(16)) tail=replicate(16'haa55);
-                RfDCFrame y=unpack({pack(tail),p1});
-                $display("writ:", fshow(y));
-                out_fifo.enq(
-                    AXI4_Stream_Pkg{
-                        data: {pack(tail),p1},
-                        user: 0, 
-                        keep: 64'hffff_ffff_ffff_ffff,
-                        dest: 0,
-                        id: 0,
-                        last: True
-                    }
-                );
-
-                meta_data.pkt_cnt<=meta_data.pkt_cnt+1;
-                $display("=======");
-            end
-        endcase
+            endcase
+        end
     endrule
 
 
-    interface AXI4_Stream_Rd_Fab s_axis_fab=s_axis.fab;
+    interface s_axis_fab=s_axis.fab;
     //interface AXI4_Stream_Wr_Fab m_axis_fab=m_axis.fab;
-    interface Get get=toGet(out_fifo);
+    interface get=toGet(out_fifo);
     
     method Action set_src_mac(Bit#(48) v);
         src_mac<=v;
@@ -437,5 +453,102 @@ module mkRfdcPacker(RfdcPacker);
             default: 32'hffffffff;
         endcase;
         return x;
+    endmethod
+
+    method Action configured(Bit#(1) v);
+        configured_<=unpack(v);
+    endmethod
+endmodule
+
+interface RfdcPackerN#(numeric type n_inputs);
+    (*prefix="s_axi"*)
+    interface AXI4_Lite_Slave_Rd_Fab#(AxiLiteAddrWidth, AxiLiteDataWidth) s_axi_rd_fab;
+    (*prefix="s_axi"*)
+    interface AXI4_Lite_Slave_Wr_Fab#(AxiLiteAddrWidth, AxiLiteDataWidth) s_axi_wr_fab;
+
+    (* prefix="m_axis" *)
+    interface AXI4_Stream_Wr_Fab#(AxisDataWidth, 0) m_axis_fab;
+
+    (* prefix="m_axis" *)
+    interface Vector#(n_inputs,AXI4_Stream_Rd_Fab#(AxisDataWidth, 0)) s_axis_fab;
+    
+    (*always_enabled,always_ready*)
+    method Action configured(Bit#(1) v);
+endinterface
+
+
+function AXI4_Stream_Rd_Fab#(AxisDataWidth, 0) extract_axis_fab(RfdcPacker x);
+    return x.s_axis_fab;
+endfunction
+
+module mkRfdcPackerN(RfdcPackerN#(n));
+    Vector#(n, RfdcPacker) packers<-replicateM(mkRfdcPacker);
+    AXI4_Stream_Wr#(AxisDataWidth,0) m_axis <-mkAXI4_Stream_Wr(2);
+    AXI4_Lite_Slave_Rd#(AxiLiteAddrWidth,AxiLiteDataWidth) s_axi_rd<-mkAXI4_Lite_Slave_Rd(2);
+    AXI4_Lite_Slave_Wr#(AxiLiteAddrWidth,AxiLiteDataWidth) s_axi_wr<-mkAXI4_Lite_Slave_Wr(2);
+    Reg#(UInt#(8)) input_idx<-mkReg(0);
+
+    rule each;
+        let d<-packers[input_idx].get.get();
+        m_axis.pkg.put(d);
+        if(d.last)begin
+            if (input_idx==fromInteger(valueOf(n))-1) input_idx<=0;
+            else input_idx<=input_idx+1;
+        end
+    endrule
+
+    function Bool is_valid_addr(Bit#(11) addr);
+        let sel=addr[10:8];
+        let addr1=addr[7:0];
+        return sel<fromInteger(valueOf(n));
+    endfunction
+
+    rule read_cfg;
+        let rq<-s_axi_rd.request.get();
+        Bit#(11) addr=rq.addr;
+        Bit#(3) sel=addr[10:8];
+        Bit#(8) addr1=addr[7:0];
+        if(is_valid_addr(addr))begin
+            Bit#(32) result=packers[sel].get_reg(addr1);
+            let rp=AXI4_Lite_Read_Rs_Pkg{
+                data: result,
+                resp: OKAY
+            };
+            s_axi_rd.response.put(rp);
+        end
+        else
+            s_axi_rd.response.put(
+                AXI4_Lite_Read_Rs_Pkg{
+                    data:0,
+                    resp: DECERR
+                }
+            );
+    endrule
+
+    rule write_cfg;
+        let rq<-s_axi_wr.request.get();
+        Bit#(11) addr=rq.addr;
+        Bit#(32) data=rq.data;
+        Bit#(3) sel=addr[10:8];
+        Bit#(8) addr1=addr[7:0];
+        if(is_valid_addr(addr))begin
+            packers[sel].set_reg(addr1,data);
+            s_axi_wr.response.put(AXI4_Lite_Write_Rs_Pkg{
+                resp: OKAY
+            });
+        end
+        else
+            s_axi_wr.response.put(AXI4_Lite_Write_Rs_Pkg{
+                resp: DECERR
+            });
+    endrule
+
+    interface s_axis_fab=map(extract_axis_fab, packers);
+    interface s_axi_rd_fab = s_axi_rd.fab;
+    interface s_axi_wr_fab = s_axi_wr.fab;
+    interface m_axis_fab=m_axis.fab;
+
+    method Action configured(Bit#(1) v);
+        for(Integer i=0;i<valueOf(n);i=i+1)packers[i].configured(v);
     endmethod
 endmodule
