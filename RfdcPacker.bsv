@@ -573,7 +573,7 @@ module mkRfdcPackerN(RfdcPackerN#(n));
     function Bool is_valid_addr(Bit#(11) addr);
         let sel=addr[10:8];
         let addr1=addr[7:0];
-        return sel<fromInteger(valueOf(n));
+        return fromInteger(valueOf(n)-1) >= sel;
     endfunction
 
     rule read_cfg;
@@ -698,5 +698,11 @@ endmodule
 (*synthesize*)
 module mkAutoRfdcPacker4(AutoRfdcPackerN#(4));
     AutoRfdcPackerN#(4) packers<-mkAutoRfdcPackerN;
+    return packers;
+endmodule
+
+(*synthesize*)
+module mkAutoRfdcPacker8(AutoRfdcPackerN#(8));
+    AutoRfdcPackerN#(8) packers<-mkAutoRfdcPackerN;
     return packers;
 endmodule
