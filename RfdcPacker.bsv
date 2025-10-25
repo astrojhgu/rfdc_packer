@@ -1,6 +1,8 @@
 import AXI4_Stream::*;
 import AXI4_Lite_Slave::*;
+import AXI4_Lite_Master::*;
 import AXI4_Lite_Types::*;
+import Connectable::*;
 import FIFO::*;
 import GetPut::*;
 import Vector::*;
@@ -622,4 +624,79 @@ module mkRfdcPackerN(RfdcPackerN#(n));
     method Action configured(Bit#(1) v);
         for(Integer i=0;i<valueOf(n);i=i+1)packers[i].configured(v);
     endmethod
+endmodule
+
+
+interface AutoRfdcPackerN#(numeric type n_inputs);
+    (* prefix="m_axis" *)
+    interface AXI4_Stream_Wr_Fab#(AxisDataWidth, 0) m_axis_fab;
+
+    (* prefix="m_axis" *)
+    interface Vector#(n_inputs,AXI4_Stream_Rd_Fab#(AxisDataWidth, 0)) s_axis_fab;
+endinterface
+
+module mkAutoRfdcPackerN(AutoRfdcPackerN#(n));
+    AXI4_Lite_Master_Wr#(11, 32) axi4_lite_wr<-mkAXI4_Lite_Master_Wr(2);
+    AXI4_Lite_Master_Rd#(11, 32) axi4_lite_rd<-mkAXI4_Lite_Master_Rd(2);
+    RfdcPackerN#(n) packers<-mkRfdcPackerN;
+    Reg#(Bool) configured<-mkReg(False);
+    Reg#(Bit#(8)) i<-mkReg(0);
+
+    mkConnection(axi4_lite_wr.fab, packers.s_axi_wr_fab);
+    mkConnection(axi4_lite_rd.fab, packers.s_axi_rd_fab);
+
+    function Stmt config_packer(Bit#(3) sel, Bit#(8) addr, Bit#(32) value);
+        return seq
+        axi4_lite_wr.request.put(AXI4_Lite_Write_Rq_Pkg{
+            addr: {sel, addr},
+            data: value, 
+            strb: 4'hf,
+            prot: PRIV_INSECURE_INSTRUCTION
+        });
+        action
+            let r<-axi4_lite_wr.response.get();
+            $display("resp: ",r);
+        endaction
+        endseq;
+    endfunction
+
+    
+    rule cfg;
+        packers.configured(pack(configured));
+    endrule
+
+    mkAutoFSM(
+        seq  
+            configured<=False;
+            for(i<=0;i!=fromInteger(valueOf(n));i<=i+1)
+            seq
+                config_packer(truncate(i), 8'h00, 32'h10_70_fd_b3);
+                config_packer(truncate(i), 8'h04, 32'h00_00_68_de);
+                config_packer(truncate(i), 8'h08, 32'h10_70_fd_b3);
+                config_packer(truncate(i), 8'h0c, 32'h00_00_68_11);
+
+                config_packer(truncate(i), 8'h10, 32'h0a_64_0b_01);
+                config_packer(truncate(i), 8'h14, 32'h0a_64_0b_10);
+                config_packer(truncate(i), 8'h18, {24'h00_00_11, i});
+                config_packer(truncate(i), 8'h1c, {24'h00_00_12, i});
+            endseq
+            configured<=True;
+        endseq
+    ); 
+
+
+    interface m_axis_fab=packers.m_axis_fab;
+    interface s_axis_fab=packers.s_axis_fab;
+endmodule
+
+(*synthesize*)
+module mkAutoRfdcPacker2(AutoRfdcPackerN#(2));
+    AutoRfdcPackerN#(2) packers<-mkAutoRfdcPackerN;
+    return packers;
+endmodule
+
+(*synthesize*)
+module mkAutoRfdcPacker4(AutoRfdcPackerN#(4));
+    AutoRfdcPackerN#(4) packers<-mkAutoRfdcPackerN;
+    return packers;
 endmodule

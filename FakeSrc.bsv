@@ -131,18 +131,6 @@ module mkFakeSrcWithHdr2(FakeSrc);
     rule cfg;
         packers.configured(pack(configured));
     endrule
-
-    rule each(configured);
-        //$display("cfg:", configured);
-        //let d<-s_axis.pkg.get();
-        //RfDCFrame y=unpack(d.data);
-        //$display(fshow(y));
-        //if(d.last)
-        //$display("========");
-        //step_cnt<=step_cnt+1;
-        //if(step_cnt==260)$finish;
-    endrule
-
     
     mkAutoFSM(
         seq        
