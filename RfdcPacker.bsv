@@ -228,6 +228,8 @@ module mkRfdcPacker(RfdcPacker);
     Bit#(8) src_port_addr=8'h1c;
     Reg#(Bit#(16)) src_port<-mkReg(0);
 
+    Reg#(Bit#(336)) net_header<-mkReg(0);
+
     
     //Reg#(Bit#(64)) cnt<-mkReg(0);
     Reg#(MetaData) meta_data<-mkReg(compose_metadata(0));
@@ -254,7 +256,10 @@ module mkRfdcPacker(RfdcPacker);
 
     rule each;
         old_configured_<=configured_;
-        if(!old_configured_) meta_data.pkt_cnt<=0;
+        if(!old_configured_) begin
+            meta_data.pkt_cnt<=0;
+            net_header<=calc_net_header();
+        end
         else
         begin
             case (state)
@@ -266,11 +271,11 @@ module mkRfdcPacker(RfdcPacker);
 
                     RfDCFrame y=unpack(d.data);
                     //$display("read:",fshow(y));
-                    y=unpack({ pack(meta_data)[meta_data_part_1_size-1:0], calc_net_header()});
+                    y=unpack({ pack(meta_data)[meta_data_part_1_size-1:0], net_header});
                     //$display("write:",fshow(y));
                     out_fifo.enq(
                         AXI4_Stream_Pkg{
-                            data: { pack(meta_data)[meta_data_part_1_size-1:0], calc_net_header()},
+                            data: { pack(meta_data)[meta_data_part_1_size-1:0], net_header},
                             user: 0, 
                             keep: 64'hffff_ffff_ffff_ffff,
                             dest: 0,
