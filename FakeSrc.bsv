@@ -36,7 +36,7 @@ endinterface
 
 (*synthesize*)
 module mkFakeSrc(FakeSrc);
-    AXI4_Stream_Wr#(512, 0) m_axis<-mkAXI4_Stream_Wr(2);
+    AXI4_Stream_Wr#(512, 0) m_axis<-mkAXI4_Stream_Wr(4);
     Reg#(Int#(32)) i<-mkReg(0);
     Reg#(Vector#(32, Bit#(16))) data<-mkReg(genWith(gen_data));
 

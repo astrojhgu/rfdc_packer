@@ -4,6 +4,7 @@ import AXI4_Lite_Master::*;
 import AXI4_Lite_Types::*;
 import Connectable::*;
 import FIFO::*;
+// import Clocks::*;
 import GetPut::*;
 import Vector::*;
 import BlueUtils::*;
@@ -298,7 +299,12 @@ module mkRfdcPacker(RfdcPacker);
 
     Reg#(Bit#(400)) header_buffer<-mkReg(0);
 
+
+    // Clock current_clk<-exposeCurrentClock();
+    // Reset current_rst<-exposeCurrentReset();
+
     FIFO#(AXI4_Stream_Pkg#(AxisDataWidth, 0)) out_fifo<-mkSizedFIFO(2);
+    //SyncFIFOIfc#(AXI4_Stream_Pkg#(AxisDataWidth, 0)) out_fifo <- mkSyncFIFO(4, current_clk, current_rst, current_clk);
 
     Reg#(Bool) configured_<-mkReg(False);
     Reg#(Bool) old_configured_<-mkReg(False);
@@ -542,7 +548,7 @@ interface RfdcPackerN#(numeric type n_inputs);
     (* prefix="m_axis" *)
     interface AXI4_Stream_Wr_Fab#(AxisDataWidth, 0) m_axis_fab;
 
-    (* prefix="m_axis" *)
+    (* prefix="s_axis" *)
     interface Vector#(n_inputs,AXI4_Stream_Rd_Fab#(AxisDataWidth, 0)) s_axis_fab;
     
     (*always_enabled,always_ready*)
@@ -556,7 +562,7 @@ endfunction
 
 module mkRfdcPackerN(RfdcPackerN#(n));
     Vector#(n, RfdcPacker) packers<-replicateM(mkRfdcPacker);
-    AXI4_Stream_Wr#(AxisDataWidth,0) m_axis <-mkAXI4_Stream_Wr(2);
+    AXI4_Stream_Wr#(AxisDataWidth,0) m_axis <-mkAXI4_Stream_Wr(4);
     AXI4_Lite_Slave_Rd#(AxiLiteAddrWidth,AxiLiteDataWidth) s_axi_rd<-mkAXI4_Lite_Slave_Rd(2);
     AXI4_Lite_Slave_Wr#(AxiLiteAddrWidth,AxiLiteDataWidth) s_axi_wr<-mkAXI4_Lite_Slave_Wr(2);
     Reg#(UInt#(8)) input_idx<-mkReg(0);
@@ -631,7 +637,7 @@ interface AutoRfdcPackerN#(numeric type n_inputs);
     (* prefix="m_axis" *)
     interface AXI4_Stream_Wr_Fab#(AxisDataWidth, 0) m_axis_fab;
 
-    (* prefix="m_axis" *)
+    (* prefix="s_axis" *)
     interface Vector#(n_inputs,AXI4_Stream_Rd_Fab#(AxisDataWidth, 0)) s_axis_fab;
 endinterface
 
