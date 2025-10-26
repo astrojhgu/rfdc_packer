@@ -4,7 +4,7 @@ import AXI4_Lite_Master::*;
 import AXI4_Lite_Types::*;
 import Connectable::*;
 import FIFO::*;
-// import Clocks::*;
+import Clocks::*;
 import GetPut::*;
 import Vector::*;
 import BlueUtils::*;
@@ -560,7 +560,11 @@ function AXI4_Stream_Rd_Fab#(AxisDataWidth, 0) extract_axis_fab(RfdcPacker x);
     return x.s_axis_fab;
 endfunction
 
+
 module mkRfdcPackerN(RfdcPackerN#(n));
+    Clock current_clk<-exposeCurrentClock;
+    Reset current_rst<-exposeCurrentReset;
+
     Vector#(n, RfdcPacker) packers<-replicateM(mkRfdcPacker);
     AXI4_Stream_Wr#(AxisDataWidth,0) m_axis <-mkAXI4_Stream_Wr(4);
     AXI4_Lite_Slave_Rd#(AxiLiteAddrWidth,AxiLiteDataWidth) s_axi_rd<-mkAXI4_Lite_Slave_Rd(2);
@@ -576,51 +580,111 @@ module mkRfdcPackerN(RfdcPackerN#(n));
         end
     endrule
 
-    function Bool is_valid_addr(Bit#(11) addr);
-        let sel=addr[10:8];
-        let addr1=addr[7:0];
+    function Bool is_valid_addr(Bit#(3) sel);
         return fromInteger(valueOf(n)-1) >= sel;
     endfunction
 
-    rule read_cfg;
-        let rq<-s_axi_rd.request.get();
-        Bit#(11) addr=rq.addr;
-        Bit#(3) sel=addr[10:8];
-        Bit#(8) addr1=addr[7:0];
-        if(is_valid_addr(addr))begin
-            Bit#(32) result=packers[sel].get_reg(addr1);
-            let rp=AXI4_Lite_Read_Rs_Pkg{
-                data: result,
-                resp: OKAY
-            };
-            s_axi_rd.response.put(rp);
-        end
-        else
-            s_axi_rd.response.put(
-                AXI4_Lite_Read_Rs_Pkg{
-                    data:0,
-                    resp: DECERR
-                }
-            );
-    endrule
+    Reg#(Bit#(3)) write_sel<-mkReg(0);
+    Reg#(Bit#(8)) write_addr<-mkReg(0);
+    Reg#(Bit#(32)) write_value<-mkReg(0);
 
-    rule write_cfg;
-        let rq<-s_axi_wr.request.get();
-        Bit#(11) addr=rq.addr;
-        Bit#(32) data=rq.data;
-        Bit#(3) sel=addr[10:8];
-        Bit#(8) addr1=addr[7:0];
-        if(is_valid_addr(addr))begin
-            packers[sel].set_reg(addr1,data);
-            s_axi_wr.response.put(AXI4_Lite_Write_Rs_Pkg{
-                resp: OKAY
-            });
-        end
-        else
-            s_axi_wr.response.put(AXI4_Lite_Write_Rs_Pkg{
-                resp: DECERR
-            });
-    endrule
+    Reg#(Bit#(3)) read_sel<-mkReg(0);
+    Reg#(Bit#(8)) read_addr<-mkReg(0);
+    Reg#(Bit#(32)) read_value<-mkReg(0);
+
+
+    
+    // rule read_cfg;
+    //     let rq<-s_axi_rd.request.get();
+    //     Bit#(11) addr=rq.addr;
+    //     Bit#(3) sel=addr[10:8];
+    //     Bit#(8) addr1=addr[7:0];
+    //     if(is_valid_addr(addr))begin
+    //         Bit#(32) result=packers[sel].get_reg(addr1);
+    //         let rp=AXI4_Lite_Read_Rs_Pkg{
+    //             data: result,
+    //             resp: OKAY
+    //         };
+    //         s_axi_rd.response.put(rp);
+    //     end
+    //     else
+    //         s_axi_rd.response.put(
+    //             AXI4_Lite_Read_Rs_Pkg{
+    //                 data:0,
+    //                 resp: DECERR
+    //             }
+    //         );
+    // endrule
+
+    // rule write_cfg;
+    //     let rq<-s_axi_wr.request.get();
+    //     Bit#(11) addr=rq.addr;
+    //     Bit#(32) data=rq.data;
+    //     Bit#(3) sel=addr[10:8];
+    //     Bit#(8) addr1=addr[7:0];
+    //     if(is_valid_addr(addr))begin
+    //         packers[sel].set_reg(addr1,data);
+    //         s_axi_wr.response.put(AXI4_Lite_Write_Rs_Pkg{
+    //             resp: OKAY
+    //         });
+    //     end
+    //     else
+    //         s_axi_wr.response.put(AXI4_Lite_Write_Rs_Pkg{
+    //             resp: DECERR
+    //         });
+    // endrule
+    
+    mkAutoFSM(
+        seq            
+            while(True)seq
+                action
+                    let rq<-s_axi_rd.request.get();
+                    read_addr<=rq.addr[7:0];
+                    read_sel<=rq.addr[10:8];
+                endaction
+                if(is_valid_addr(read_sel))seq
+                    read_value<=packers[read_sel].get_reg(read_addr);
+                    s_axi_rd.response.put(AXI4_Lite_Read_Rs_Pkg{
+                        data: read_value,
+                        resp: OKAY
+                    });
+                endseq
+                else
+                    s_axi_rd.response.put(
+                        AXI4_Lite_Read_Rs_Pkg{
+                            data:0,
+                            resp: DECERR
+                        }
+                    );
+            endseq        
+        endseq
+    );
+
+    mkAutoFSM(
+        seq            
+            while(True)seq
+                action
+                    let rq<-s_axi_wr.request.get();
+                    write_addr<=rq.addr[7:0];
+                    write_sel<=rq.addr[10:8];
+                    write_value<=rq.data;
+                endaction
+                if(is_valid_addr(write_sel))seq
+                    packers[write_sel].set_reg(write_addr, write_value);
+                    s_axi_wr.response.put(AXI4_Lite_Write_Rs_Pkg{
+                        resp: OKAY
+                    });
+                endseq
+                else
+                    s_axi_wr.response.put(
+                        AXI4_Lite_Write_Rs_Pkg{
+                            resp: DECERR
+                        }
+                    );
+            endseq        
+        endseq
+    );
+
 
     interface s_axis_fab=map(extract_axis_fab, packers);
     interface s_axi_rd_fab = s_axi_rd.fab;
