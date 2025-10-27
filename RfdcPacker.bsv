@@ -260,7 +260,7 @@ typedef enum{
 
 (*synthesize*)
 module mkRfdcPacker(RfdcPacker);
-    AXI4_Stream_Rd#(AxisDataWidth, 0) s_axis<-mkAXI4_Stream_Rd(2);
+    AXI4_Stream_Rd#(AxisDataWidth, 0) s_axis<-mkAXI4_Stream_Rd(4);
 
     Reg#(Bit#(AxisDataWidth)) stage1<-mkReg(0);
     Reg#(Bit#(AxisDataWidth)) stage2<-mkReg(0);
@@ -303,7 +303,7 @@ module mkRfdcPacker(RfdcPacker);
     // Clock current_clk<-exposeCurrentClock();
     // Reset current_rst<-exposeCurrentReset();
 
-    FIFO#(AXI4_Stream_Pkg#(AxisDataWidth, 0)) out_fifo<-mkSizedFIFO(2);
+    FIFO#(AXI4_Stream_Pkg#(AxisDataWidth, 0)) out_fifo<-mkSizedFIFO(4);
     //SyncFIFOIfc#(AXI4_Stream_Pkg#(AxisDataWidth, 0)) out_fifo <- mkSyncFIFO(4, current_clk, current_rst, current_clk);
 
     Reg#(Bool) configured_<-mkReg(False);
