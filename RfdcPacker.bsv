@@ -14,10 +14,11 @@ import Probe::*;
 typedef 512 AxisDataWidth;
 typedef 8192 PayloadLength;
 typedef 32 AxiLiteDataWidth;
-typedef 11 AxiLiteAddrWidth;
+typedef 12 AxiLiteAddrWidth;
 
 
 Int#(16) payload_length=fromInteger(valueOf(PayloadLength));
+
 Integer axis_data_width=valueOf(AxisDataWidth);
 Integer axi_lite_data_width=valueOf(AxiLiteDataWidth);
 Integer axi_lite_addr_width=valueOf(AxiLiteAddrWidth);
@@ -35,7 +36,8 @@ instance FShow#(RfDCFrame);
     function Fmt fshow(RfDCFrame f);
         Fmt f1=$format();
         for(Integer i=0;i<32;i=i+1)begin
-            f1=f1+disphex(f.value[i]);
+            //f1=f1+disphex(f.value[i]);
+            f1=f1+$format("%x%x ", f.value[i][7:0], f.value[i][15:8]);
         end
         return f1;
     endfunction
@@ -126,57 +128,6 @@ interface IPv4HdrCheckSum;
     method Bit#(160) get;
 endinterface
 
-module mkIPv4HdrCheckSum(IPv4HdrCheckSum);
-    Reg#(Bit#(32)) dst_ip_<-mkReg(0);
-    Reg#(Bit#(32)) src_ip_<-mkReg(0);
-    Bit#(160) unchecked={
-        //[159:128]
-        //dst_ip[7:0],dst_ip[15:8],dst_ip[23:16],dst_ip[31:24],
-        toggle_endianness(dst_ip_)
-        //[127:96]
-        //src_ip[7:0],src_ip[15:8],src_ip[23:16],src_ip[31:24],
-        ,toggle_endianness(src_ip_)
-        //[95:64]
-        ,16'h0 //checksum
-        ,8'd17 //udp
-        ,8'hff//ttl
-
-        //[63:32]
-        ,16'b0000_0000_010_00000 //flags+fragment offset
-        ,16'h0 //identification
-
-
-        //31:0
-        ,toggle_endianness(pack((payload_length+8+20)))
-        ,8'h00//dscp+ecn
-        ,8'h45//version+ihl
-    };
-    Vector#(10, Bit#(16)) to_check=unpack(unchecked);
-    Reg#(Bit#(20)) r <-mkReg(0);
-    Reg#(Bit#(20)) checksum1<-mkReg(0);
-    Reg#(Bit#(16)) checksum<-mkReg(0);
-    Bit#(160) result={unchecked[159:96], pack(checksum), unchecked[79:0]};
-
-    Reg#(UInt#(8)) i<-mkReg(0);
-
-    FSM fsm <-mkFSM(
-        seq
-            r<=0;
-            for(i<=0;i!=10;i<=i+1)action
-                r<=r+extend(to_check[i]);
-            endaction
-            checksum1<=extend(r[19:16])+extend(r[15:0]);
-            checksum<=~(extend(checksum1[19:16])+extend(checksum1[15:0]));
-        endseq
-    );
-
-    method Action put(Bit#(32) dst_ip, Bit#(32) src_ip) if (fsm.done());
-        dst_ip_<=dst_ip;
-        src_ip_<=src_ip;
-        fsm.start();
-    endmethod
-    method Bit#(160) get if(fsm.done())=result;
-endmodule
 
 typedef Bit#(64) UDPHdr;
 function Bit#(64) udp_hdr(Bit#(16) dst_port, Bit#(16) src_port, UInt#(16) payload_length1);
@@ -238,6 +189,8 @@ typedef SizeOf#(EtherHdr) EtherHdrSize;//14*8=112
 typedef SizeOf#(IPv4Hdr) IPv4HdrSize;//20*8=160
 typedef SizeOf#(UDPHdr) UDPHdrSize;//8*8=64
 
+typedef TAdd#(PayloadLength, TDiv#(SizeOf#(MetaData), 8)) UdpUserDataLengthInBytes;
+UInt#(16) udp_user_data_length_in_bytes=fromInteger(valueOf(UdpUserDataLengthInBytes));
 
 
 
@@ -249,6 +202,60 @@ typedef TSub#(MetaDataSize, MetaDataPart2Size) MetaDataPart1Size;
 Integer meta_data_part_1_size=valueOf(MetaDataPart1Size);
 Integer meta_data_part_2_size=valueOf(MetaDataPart2Size);
 Integer meta_data_size=valueOf(MetaDataSize);
+
+
+module mkIPv4HdrCheckSum(IPv4HdrCheckSum);
+    Reg#(Bit#(32)) dst_ip_<-mkReg(0);
+    Reg#(Bit#(32)) src_ip_<-mkReg(0);
+    Bit#(160) unchecked={
+        //[159:128]
+        //dst_ip[7:0],dst_ip[15:8],dst_ip[23:16],dst_ip[31:24],
+        toggle_endianness(dst_ip_)
+        //[127:96]
+        //src_ip[7:0],src_ip[15:8],src_ip[23:16],src_ip[31:24],
+        ,toggle_endianness(src_ip_)
+        //[95:64]
+        ,16'h0 //checksum
+        ,8'd17 //udp
+        ,8'hff//ttl
+
+        //[63:32]
+        ,16'b0000_0000_010_00000 //flags+fragment offset
+        ,16'h0 //identification
+
+
+        //31:0
+        ,toggle_endianness(pack((udp_user_data_length_in_bytes+8+20)))
+        ,8'h00//dscp+ecn
+        ,8'h45//version+ihl
+    };
+    Vector#(10, Bit#(16)) to_check=unpack(unchecked);
+    Reg#(Bit#(20)) r <-mkReg(0);
+    Reg#(Bit#(20)) checksum1<-mkReg(0);
+    Reg#(Bit#(16)) checksum<-mkReg(0);
+    Bit#(160) result={unchecked[159:96], pack(checksum), unchecked[79:0]};
+
+    Reg#(UInt#(8)) i<-mkReg(0);
+
+    FSM fsm <-mkFSM(
+        seq
+            r<=0;
+            for(i<=0;i!=10;i<=i+1)action
+                r<=r+extend(to_check[i]);
+            endaction
+            checksum1<=extend(r[19:16])+extend(r[15:0]);
+            checksum<=~(extend(checksum1[19:16])+extend(checksum1[15:0]));
+        endseq
+    );
+
+    method Action put(Bit#(32) dst_ip, Bit#(32) src_ip) if (fsm.done());
+        dst_ip_<=dst_ip;
+        src_ip_<=src_ip;
+        fsm.start();
+    endmethod
+    method Bit#(160) get if(fsm.done())=result;
+endmodule
+
 
 typedef enum{
     PktHead1,
@@ -313,7 +320,7 @@ module mkRfdcPacker(RfdcPacker);
     //Probe#(PktState) state_probe<-mkProbe;
     Reg#(IPv4Hdr) ipv4_hdr<-mkReg(0);
     Bit#(336) net_header={
-        udp_hdr(dst_port,src_port,fromInteger(valueOf(PayloadLength))),
+        udp_hdr(dst_port,src_port,udp_user_data_length_in_bytes),
         ipv4_hdr,
         eth_hdr(dst_mac, src_mac)
     };
@@ -706,8 +713,8 @@ interface AutoRfdcPackerN#(numeric type n_inputs);
 endinterface
 
 module mkAutoRfdcPackerN(AutoRfdcPackerN#(n));
-    AXI4_Lite_Master_Wr#(11, 32) axi4_lite_wr<-mkAXI4_Lite_Master_Wr(2);
-    AXI4_Lite_Master_Rd#(11, 32) axi4_lite_rd<-mkAXI4_Lite_Master_Rd(2);
+    AXI4_Lite_Master_Wr#(AxiLiteAddrWidth, 32) axi4_lite_wr<-mkAXI4_Lite_Master_Wr(2);
+    AXI4_Lite_Master_Rd#(AxiLiteAddrWidth, 32) axi4_lite_rd<-mkAXI4_Lite_Master_Rd(2);
     RfdcPackerN#(n) packers<-mkRfdcPackerN;
     Reg#(Bool) configured<-mkReg(False);
     Reg#(Bit#(8)) i<-mkReg(0);
@@ -718,7 +725,7 @@ module mkAutoRfdcPackerN(AutoRfdcPackerN#(n));
     function Stmt config_packer(Bit#(3) sel, Bit#(8) addr, Bit#(32) value);
         return seq
         axi4_lite_wr.request.put(AXI4_Lite_Write_Rq_Pkg{
-            addr: {sel, addr},
+            addr: {0, sel, addr},
             data: value, 
             strb: 4'hf,
             prot: PRIV_INSECURE_INSTRUCTION

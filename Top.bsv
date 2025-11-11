@@ -1,4 +1,5 @@
 import RfdcPacker::*;
+import NetResponder::*;
 import AXI4_Stream::*;
 import AXI4_Lite_Master::*;
 import AXI4_Lite_Types::*;
@@ -8,9 +9,9 @@ import Connectable::*;
 import StmtFSM::*;
 import FakeSrc::*;
 import AXISink::*;
+import AXISGate::*;
 
-
-
+/*
 module mkTop(Empty);
     Vector#(2, FakeSrc) fs <- replicateM(mkFakeSrc);
 
@@ -94,4 +95,59 @@ module mkTop(Empty);
         endseq
     );
     
+endmodule
+*/
+
+module mkTop(Empty);
+    ArpResponderCfg cfg<-mkArpResponderCfg;
+    ArpResponder#(1) arsp<-mkArpResponder;
+
+    AXI4_Stream_Wr#(512,0) axis_wr<-mkAXI4_Stream_Wr(2);
+    AXI4_Stream_Rd#(512,0) axis_rd<-mkAXI4_Stream_Rd(2);
+
+    mkConnection(cfg.m_axi_rd_fab, arsp.s_axi_rd_fab);
+    mkConnection(cfg.m_axi_wr_fab, arsp.s_axi_wr_fab);
+
+    mkConnection(axis_wr.fab, arsp.s_axis_eth_fab);
+    mkConnection(arsp.m_axis_eth_fab, axis_rd.fab);
+
+    mkAutoFSM(
+        seq            
+            action
+            ArpPacket ap=ArpPacket{
+                dst_mac: 48'hff_ff_ff_ff_ff_ff,
+                src_mac: 48'h01_02_03_04_05_06,
+                ether_type: 16'h0800,
+                arp_data: ArpData{
+                    htype: 16'h1,
+                    ptype: 16'h0800,
+                    hlen: 6,
+                    plen: 4,
+                    oper: 1,
+                    sha: 48'h01_02_03_04_05_06,
+                    spa: 32'h01_02_03_04,
+                    tha: 0,
+                    tpa: 32'h0a_64_0b_10
+                }
+            };
+            $display("aaa");
+            axis_wr.pkg.put(AXI4_Stream_Pkg{
+                data: {176'hffff_ffffffff_ffffffff_ffffffff_ffffffff_ffffffff,pack(ap)},
+                        user: 0, 
+                        keep: {22'h3fffff, 42'h3ffffffffff},
+                        dest: 0, 
+                        id: 0, 
+                        last: True
+            });
+            endaction
+            action 
+                let d<-axis_rd.pkg.get();
+                ArpPacket x=unpack(d.data[335:0]);
+                $display(fshow(x));
+            endaction
+
+            repeat(32) noAction;
+        endseq
+    );
+
 endmodule

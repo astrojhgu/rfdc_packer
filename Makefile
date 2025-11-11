@@ -1,7 +1,7 @@
 # 顶层模块名
 TOP     = mkTop
 BSC     = bsc
-SRC     = Top.bsv RfdcPacker.bsv FakeSrc.bsv AXISink.bsv
+SRC     = Top.bsv RfdcPacker.bsv FakeSrc.bsv AXISink.bsv NetResponder.bsv AXISGate.bsv
 
 # 搜索路径（含BlueAXI、BlueLib等）
 BSCPATH = -p "+:.:../BlueAXI/src:../BlueLib/src:../BlueUtils"

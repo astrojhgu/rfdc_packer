@@ -94,8 +94,8 @@ endmodule
 module mkFakeSrcWithHdr2(FakeSrc);
     Vector#(2, FakeSrc) fs <- replicateM(mkFakeSrc);
 
-    AXI4_Lite_Master_Wr#(11, 32) axi4_lite_wr<-mkAXI4_Lite_Master_Wr(2);
-    AXI4_Lite_Master_Rd#(11, 32) axi4_lite_rd<-mkAXI4_Lite_Master_Rd(2);
+    AXI4_Lite_Master_Wr#(12, 32) axi4_lite_wr<-mkAXI4_Lite_Master_Wr(2);
+    AXI4_Lite_Master_Rd#(12, 32) axi4_lite_rd<-mkAXI4_Lite_Master_Rd(2);
 
     RfdcPackerN#(2) packers<-mkRfdcPackerN;
 
@@ -111,7 +111,7 @@ module mkFakeSrcWithHdr2(FakeSrc);
     function Stmt config_packer(Bit#(3) sel, Bit#(8) addr, Bit#(32) value);
         return seq
         axi4_lite_wr.request.put(AXI4_Lite_Write_Rq_Pkg{
-            addr: {sel, addr},
+            addr: {0, sel, addr},
             data: value, 
             strb: 4'hf,
             prot: PRIV_INSECURE_INSTRUCTION
