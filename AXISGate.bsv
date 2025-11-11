@@ -33,7 +33,10 @@ interface AXISGateN#(numeric type nports);
     method Bool transmitting;
 
     (* always_enabled, always_ready *)
-    method Bool all_not_empty;
+    method Bool all_incoming;
+
+    (* always_enabled, always_ready *)
+    method Bool any_outgoing;
 endinterface
 
 module mkAXISGateN(AXISGateN#(n));
@@ -45,6 +48,8 @@ module mkAXISGateN(AXISGateN#(n));
     Vector#(n, FIFOF#(AXI4_Stream_Pkg#(AxisDataWidth, 0))) fifos <- replicateM(mkFIFOF);
     Vector#(n, AXI4_Stream_Wr#(AxisDataWidth, 0)) masters<-replicateM(mkAXI4_Stream_Wr(4));
     Vector#(n, AXI4_Stream_Rd#(AxisDataWidth, 0)) slaves<-replicateM(mkAXI4_Stream_Rd(4));
+    Wire#(Bool) incoming <- mkDWire(False);
+    Wire#(Bool) outgoing <- mkDWire(False);
 
     function AXI4_Stream_Rd_Fab#(AxisDataWidth, 0) extract_axis_rd_fab(AXI4_Stream_Rd#(AxisDataWidth,0) x);
         return x.fab;
@@ -69,6 +74,7 @@ module mkAXISGateN(AXISGateN#(n));
             //data_regs[i]<=data;
             if(fifos[i].notFull()) fifos[i].enq(data);
         end
+        incoming<=True;
     endrule
 
     rule send;
@@ -77,6 +83,7 @@ module mkAXISGateN(AXISGateN#(n));
             fifos[i].deq;
             if(_transmit) masters[i].pkg.put(d);
         end
+        outgoing<=True;
     endrule
     
 
@@ -91,13 +98,8 @@ module mkAXISGateN(AXISGateN#(n));
     endmethod
 
     method Bool transmitting=_transmit;
-    method Bool all_not_empty;
-        Bool res=True;
-        for(Integer i=0;i!=valueOf(n);i=i+1)begin
-            res=res && fifos[i].notEmpty();
-        end
-        return res;
-    endmethod
+    method Bool any_outgoing=outgoing;
+    method Bool all_incoming=incoming;
 
     interface m_axis_fab=map(extract_axis_wr_fab, masters);
     interface s_axis_fab=map(extract_axis_rd_fab, slaves);
