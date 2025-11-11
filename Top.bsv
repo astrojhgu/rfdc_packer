@@ -98,6 +98,7 @@ module mkTop(Empty);
 endmodule
 */
 
+/*
 module mkTop(Empty);
     ArpResponderCfg cfg<-mkArpResponderCfg;
     ArpResponder#(1) arsp<-mkArpResponder;
@@ -150,4 +151,25 @@ module mkTop(Empty);
         endseq
     );
 
+endmodule
+*/
+
+module mkTop(Empty);
+    FakeSrc src<-mkFakeSrc;
+    AutoRfdcPackerN#(1) packer<-mkAutoRfdcPackerN;
+    AXI4_Stream_Rd#(512,0) axis_rd<-mkAXI4_Stream_Rd(2);
+    mkConnection(src.m_axis_fab, packer.s_axis_fab[0]);
+    mkConnection(packer.m_axis_fab, axis_rd.fab);
+
+
+    mkAutoFSM(
+        seq
+            repeat(100)
+            action
+                let x<-axis_rd.pkg.get();
+                $display(x.data);
+                //$display(packer._configured);
+            endaction
+        endseq
+    );
 endmodule

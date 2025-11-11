@@ -66,6 +66,7 @@ module mkAXISGateN(AXISGateN#(n));
         _old_pps<=_pps;
     endrule
 
+
     
     rule recv;
         for(Integer i=0;i!=valueOf(n);i=i+1)begin

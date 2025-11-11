@@ -67,7 +67,7 @@ module mkFakeSrcWithHdr(FakeSrc);
     mkConnection(fs.m_axis_fab, packer.s_axis_fab);
 
     rule cfged;
-        packer.configured(pack(configured));
+        packer.configured(configured);
     endrule
 
     rule cfg(!configured);
@@ -101,8 +101,6 @@ module mkFakeSrcWithHdr2(FakeSrc);
 
     //AXI4_Stream_Rd#(512,0) s_axis<-mkAXI4_Stream_Rd(2);
 
-    Reg#(Bool) configured<-mkReg(False);
-
     //mkConnection(fs.m_axis_fab, s_axis.fab);
     mkConnection(axi4_lite_wr.fab, packers.s_axi_wr_fab);
     mkConnection(axi4_lite_rd.fab, packers.s_axi_rd_fab);
@@ -128,33 +126,31 @@ module mkFakeSrcWithHdr2(FakeSrc);
     end
     
     Reg#(UInt#(32)) step_cnt<-mkReg(0);
-    rule cfg;
-        packers.configured(pack(configured));
-    endrule
+    
     
     mkAutoFSM(
         seq        
-            config_packer(0, 8'h00, 32'h10_70_fd_b3);
-            config_packer(0, 8'h04, 32'h00_00_68_de);
-            config_packer(0, 8'h08, 32'h10_70_fd_b3);
-            config_packer(0, 8'h0c, 32'h00_00_68_11);
+            config_packer(0, 8'h04, 32'h10_70_fd_b3);
+            config_packer(0, 8'h08, 32'h00_00_68_de);
+            config_packer(0, 8'h0c, 32'h10_70_fd_b3);
+            config_packer(0, 8'h10, 32'h00_00_68_11);
 
-            config_packer(0, 8'h10, 32'h0a_64_0b_01);
-            config_packer(0, 8'h14, 32'h0a_64_0b_10);
-            config_packer(0, 8'h18, 32'h00_00_11_22);
-            config_packer(0, 8'h1c, 32'h00_00_12_34);
+            config_packer(0, 8'h14, 32'h0a_64_0b_01);
+            config_packer(0, 8'h18, 32'h0a_64_0b_10);
+            config_packer(0, 8'h1c, 32'h00_00_11_22);
+            config_packer(0, 8'h20, 32'h00_00_12_34);
             
-            config_packer(1, 8'h00, 32'h10_70_fd_b3);
-            config_packer(1, 8'h04, 32'h00_00_68_de);
-            config_packer(1, 8'h08, 32'h10_70_fd_b3);
-            config_packer(1, 8'h0c, 32'h00_00_68_ee);
+            config_packer(1, 8'h04, 32'h10_70_fd_b3);
+            config_packer(1, 8'h08, 32'h00_00_68_de);
+            config_packer(1, 8'h0c, 32'h10_70_fd_b3);
+            config_packer(1, 8'h20, 32'h00_00_68_ee);
 
-            config_packer(1, 8'h10, 32'h0a_64_0b_01);
-            config_packer(1, 8'h14, 32'h0a_64_0b_20);
-            config_packer(1, 8'h18, 32'h00_00_11_22);
-            config_packer(1, 8'h1c, 32'h00_00_12_34);
+            config_packer(1, 8'h14, 32'h0a_64_0b_01);
+            config_packer(1, 8'h18, 32'h0a_64_0b_20);
+            config_packer(1, 8'h1c, 32'h00_00_11_22);
+            config_packer(1, 8'h20, 32'h00_00_12_34);
 
-            configured<=True;
+            config_packer(0, 0, 32'h1);
             while(True) seq
                 noAction;
             endseq

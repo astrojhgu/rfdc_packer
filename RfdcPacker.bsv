@@ -70,7 +70,7 @@ interface RfdcPacker;
     method Bit#(32) get_reg(Bit#(8) addr);
 
     //(*always_enabled, always_ready*)
-    method Action configured(Bit#(1) v);
+    method Action configured(Bool v);
 endinterface
 
 typedef Bit#(112) EtherHdr;
@@ -275,24 +275,24 @@ module mkRfdcPacker(RfdcPacker);
     Reg#(Bool) phase <-mkReg(False);
 
     
-    Bit#(8) dst_mac_addr_hi_32=8'h00;
-    Bit#(8) dst_mac_addr_lo_16=8'h04;
+    Bit#(8) dst_mac_addr_hi_32=8'h04;
+    Bit#(8) dst_mac_addr_lo_16=8'h08;
     Reg#(Bit#(48)) dst_mac<-mkReg(0);
 
-    Bit#(8) src_mac_addr_hi_32=8'h08;
-    Bit#(8) src_mac_addr_lo_16=8'h0c;
+    Bit#(8) src_mac_addr_hi_32=8'h0c;
+    Bit#(8) src_mac_addr_lo_16=8'h10;
     Reg#(Bit#(48)) src_mac<-mkReg(0);
     
-    Bit#(8) dst_ip_addr=8'h10;
+    Bit#(8) dst_ip_addr=8'h14;
     Reg#(Bit#(32)) dst_ip<-mkReg(0);
 
-    Bit#(8) src_ip_addr=8'h14;
+    Bit#(8) src_ip_addr=8'h18;
     Reg#(Bit#(32)) src_ip<-mkReg(0);
 
-    Bit#(8) dst_port_addr=8'h18;
+    Bit#(8) dst_port_addr=8'h1c;
     Reg#(Bit#(16)) dst_port<-mkReg(0);
 
-    Bit#(8) src_port_addr=8'h1c;
+    Bit#(8) src_port_addr=8'h20;
     Reg#(Bit#(16)) src_port<-mkReg(0);
 
     
@@ -541,8 +541,8 @@ module mkRfdcPacker(RfdcPacker);
         return x;
     endmethod
 
-    method Action configured(Bit#(1) v);
-        configured_<=unpack(v);
+    method Action configured(Bool v);
+        configured_<=v;
     endmethod
 endmodule
 
@@ -559,7 +559,7 @@ interface RfdcPackerN#(numeric type n_inputs);
     interface Vector#(n_inputs,AXI4_Stream_Rd_Fab#(AxisDataWidth, 0)) s_axis_fab;
     
     (*always_enabled,always_ready*)
-    method Action configured(Bit#(1) v);
+    method Bool configured;
 endinterface
 
 
@@ -577,6 +577,7 @@ module mkRfdcPackerN(RfdcPackerN#(n));
     AXI4_Lite_Slave_Rd#(AxiLiteAddrWidth,AxiLiteDataWidth) s_axi_rd<-mkAXI4_Lite_Slave_Rd(2);
     AXI4_Lite_Slave_Wr#(AxiLiteAddrWidth,AxiLiteDataWidth) s_axi_wr<-mkAXI4_Lite_Slave_Wr(2);
     Reg#(UInt#(8)) input_idx<-mkReg(0);
+    Reg#(Bool) _configured <- mkReg(False);
 
     rule each;
         let d<-packers[input_idx].get.get();
@@ -598,6 +599,10 @@ module mkRfdcPackerN(RfdcPackerN#(n));
     Reg#(Bit#(3)) read_sel<-mkReg(0);
     Reg#(Bit#(8)) read_addr<-mkReg(0);
     Reg#(Bit#(32)) read_value<-mkReg(0);
+
+    rule update_config;
+        for(Integer i=0;i<valueOf(n);i=i+1)packers[i].configured(_configured);
+    endrule
 
 
     
@@ -649,7 +654,13 @@ module mkRfdcPackerN(RfdcPackerN#(n));
                     read_addr<=rq.addr[7:0];
                     read_sel<=rq.addr[10:8];
                 endaction
-                if(is_valid_addr(read_sel))seq
+                if(read_sel==0 && read_addr==0)seq
+                    s_axi_rd.response.put(AXI4_Lite_Read_Rs_Pkg{
+                        data: pack(extend(pack(_configured))),
+                        resp: OKAY
+                    });
+                endseq
+                else if(is_valid_addr(read_sel))seq
                     read_value<=packers[read_sel].get_reg(read_addr);
                     s_axi_rd.response.put(AXI4_Lite_Read_Rs_Pkg{
                         data: read_value,
@@ -676,7 +687,13 @@ module mkRfdcPackerN(RfdcPackerN#(n));
                     write_sel<=rq.addr[10:8];
                     write_value<=rq.data;
                 endaction
-                if(is_valid_addr(write_sel))seq
+                if(write_sel==0 && write_addr==0)seq
+                    _configured<=write_value[0]==1;
+                    s_axi_wr.response.put(AXI4_Lite_Write_Rs_Pkg{
+                        resp: OKAY
+                    });
+                endseq
+                else if(is_valid_addr(write_sel))seq
                     packers[write_sel].set_reg(write_addr, write_value);
                     s_axi_wr.response.put(AXI4_Lite_Write_Rs_Pkg{
                         resp: OKAY
@@ -698,9 +715,7 @@ module mkRfdcPackerN(RfdcPackerN#(n));
     interface s_axi_wr_fab = s_axi_wr.fab;
     interface m_axis_fab=m_axis.fab;
 
-    method Action configured(Bit#(1) v);
-        for(Integer i=0;i<valueOf(n);i=i+1)packers[i].configured(v);
-    endmethod
+    method Bool configured=_configured;
 endmodule
 
 
@@ -716,7 +731,7 @@ module mkAutoRfdcPackerN(AutoRfdcPackerN#(n));
     AXI4_Lite_Master_Wr#(AxiLiteAddrWidth, 32) axi4_lite_wr<-mkAXI4_Lite_Master_Wr(2);
     AXI4_Lite_Master_Rd#(AxiLiteAddrWidth, 32) axi4_lite_rd<-mkAXI4_Lite_Master_Rd(2);
     RfdcPackerN#(n) packers<-mkRfdcPackerN;
-    Reg#(Bool) configured<-mkReg(False);
+    
     Reg#(Bit#(8)) i<-mkReg(0);
 
     mkConnection(axi4_lite_wr.fab, packers.s_axi_wr_fab);
@@ -738,28 +753,27 @@ module mkAutoRfdcPackerN(AutoRfdcPackerN#(n));
     endfunction
 
     
-    rule cfg;
-        packers.configured(pack(configured));
-    endrule
-
+    
     mkAutoFSM(
-        seq  
-            configured<=False;
-            for(i<=0;i!=fromInteger(valueOf(n));i<=i+1)
-            seq
-                config_packer(truncate(i), 8'h00, 32'h10_70_fd_b3);
-                config_packer(truncate(i), 8'h04, 32'h00_00_68_de);
-                config_packer(truncate(i), 8'h08, 32'h10_70_fd_b3);
-                config_packer(truncate(i), 8'h0c, 32'h00_00_68_11);
+        seq
+            while(True)seq
+                await(!packers.configured);
+                for(i<=0;i!=fromInteger(valueOf(n));i<=i+1)
+                seq
+                    config_packer(truncate(i), 8'h04, 32'h10_70_fd_b3);
+                    config_packer(truncate(i), 8'h08, 32'h00_00_68_de);
+                    config_packer(truncate(i), 8'h0c, 32'h10_70_fd_b3);
+                    config_packer(truncate(i), 8'h10, 32'h00_00_68_11);
 
-                config_packer(truncate(i), 8'h10, 32'h0a_64_0b_01);
-                config_packer(truncate(i), 8'h14, 32'h0a_64_0b_10);
-                config_packer(truncate(i), 8'h18, {24'h00_00_11, i});
-                config_packer(truncate(i), 8'h1c, {24'h00_00_12, i});
+                    config_packer(truncate(i), 8'h14, 32'h0a_64_0b_01);
+                    config_packer(truncate(i), 8'h18, 32'h0a_64_0b_10);
+                    config_packer(truncate(i), 8'h1c, {24'h00_00_11, i});
+                    config_packer(truncate(i), 8'h20, {24'h00_00_12, i});
+                endseq
+                config_packer(0, 0, 32'h1);
             endseq
-            configured<=True;
         endseq
-    ); 
+    );
 
 
     interface m_axis_fab=packers.m_axis_fab;
@@ -782,4 +796,80 @@ endmodule
 module mkAutoRfdcPacker8(AutoRfdcPackerN#(8));
     AutoRfdcPackerN#(8) packers<-mkAutoRfdcPackerN;
     return packers;
+endmodule
+
+interface RfdcPackerNCfg#(numeric type n_inputs);
+    (*always_enabled, always_ready*)
+    method Action configured(Bool x);
+    (*prefix="s_axi"*)
+    interface AXI4_Lite_Master_Rd_Fab#(AxiLiteAddrWidth, AxiLiteDataWidth) s_axi_rd_fab;
+    (*prefix="s_axi"*)
+    interface AXI4_Lite_Master_Wr_Fab#(AxiLiteAddrWidth, AxiLiteDataWidth) s_axi_wr_fab;
+endinterface
+
+module mkRfdcPackerNCfg(RfdcPackerNCfg#(n));
+    AXI4_Lite_Master_Wr#(AxiLiteAddrWidth, 32) axi4_lite_wr<-mkAXI4_Lite_Master_Wr(2);
+    AXI4_Lite_Master_Rd#(AxiLiteAddrWidth, 32) axi4_lite_rd<-mkAXI4_Lite_Master_Rd(2);
+    
+    Reg#(Bit#(8)) i<-mkReg(0);
+    Wire#(Bool) _configured<-mkBypassWire;
+
+
+    function Stmt config_packer(Bit#(3) sel, Bit#(8) addr, Bit#(32) value);
+        return seq
+        axi4_lite_wr.request.put(AXI4_Lite_Write_Rq_Pkg{
+            addr: {0, sel, addr},
+            data: value, 
+            strb: 4'hf,
+            prot: PRIV_INSECURE_INSTRUCTION
+        });
+        action
+            let r<-axi4_lite_wr.response.get();
+            $display("resp: ",r);
+        endaction
+        endseq;
+    endfunction
+
+    
+    
+    mkAutoFSM(
+        seq
+            while(True)seq
+                await(!_configured);
+                for(i<=0;i!=fromInteger(valueOf(n));i<=i+1)
+                seq
+                    config_packer(truncate(i), 8'h04, 32'h10_70_fd_b3);
+                    config_packer(truncate(i), 8'h08, 32'h00_00_68_de);
+                    config_packer(truncate(i), 8'h0c, 32'h10_70_fd_b3);
+                    config_packer(truncate(i), 8'h10, 32'h00_00_68_11);
+
+                    config_packer(truncate(i), 8'h14, 32'h0a_64_0b_01);
+                    config_packer(truncate(i), 8'h18, 32'h0a_64_0b_10);
+                    config_packer(truncate(i), 8'h1c, {24'h00_00_11, i});
+                    config_packer(truncate(i), 8'h20, {24'h00_00_12, i});
+                endseq
+                config_packer(0, 0, 32'h1);
+            endseq
+        endseq
+    );
+
+    interface s_axi_wr_fab=axi4_lite_wr.fab;
+    interface s_axi_rd_fab=axi4_lite_rd.fab;
+
+    method Action configured(Bool x);
+        _configured<=x;
+    endmethod
+endmodule
+
+
+(*synthesize*)
+module mkRfdcPacker8Cfg(RfdcPackerNCfg#(8));
+    RfdcPackerNCfg#(8) cfg<-mkRfdcPackerNCfg;
+    return cfg;
+endmodule
+
+(*synthesize*)
+module mkRfdcPacker8(RfdcPackerN#(8));
+    RfdcPackerN#(8) packer <- mkRfdcPackerN;
+    return packer;
 endmodule
