@@ -45,7 +45,7 @@ module mkAXISGateN(AXISGateN#(n));
     Wire#(Bool) _armed<-mkBypassWire;
     Reg#(Bool) _transmit<-mkReg(False);
 
-    Vector#(n, FIFOF#(AXI4_Stream_Pkg#(AxisDataWidth, 0))) fifos <- replicateM(mkFIFOF);
+    Vector#(n, Reg#(AXI4_Stream_Pkg#(AxisDataWidth, 0))) fifos <- replicateM(mkReg(unpack(0)));
     Vector#(n, AXI4_Stream_Wr#(AxisDataWidth, 0)) masters<-replicateM(mkAXI4_Stream_Wr(4));
     Vector#(n, AXI4_Stream_Rd#(AxisDataWidth, 0)) slaves<-replicateM(mkAXI4_Stream_Rd(4));
     Wire#(Bool) incoming <- mkDWire(False);
@@ -73,18 +73,24 @@ module mkAXISGateN(AXISGateN#(n));
             let data<-slaves[i].pkg.get();
             //if(_transmit) masters[i].pkg.put(data);
             //data_regs[i]<=data;
-            if(fifos[i].notFull()) fifos[i].enq(data);
+            //if(fifos[i].notFull()) fifos[i].enq(data);
+            fifos[i]<=data;
         end
         incoming<=True;
     endrule
 
     rule send;
-        for(Integer i=0;i!=valueOf(n);i=i+1)begin
-            let d=fifos[i].first;
-            fifos[i].deq;
-            if(_transmit) masters[i].pkg.put(d);
+        if(_transmit) begin
+            for(Integer i=0;i!=valueOf(n);i=i+1)begin
+                //let d=fifos[i].first;
+                //fifos[i].deq;
+                masters[i].pkg.put(fifos[i]);
+            end
+            outgoing<=True;
         end
-        outgoing<=True;
+        else begin
+            outgoing<=False;
+        end        
     endrule
     
 
