@@ -23,6 +23,16 @@ Integer axis_data_width=valueOf(AxisDataWidth);
 Integer axi_lite_data_width=valueOf(AxiLiteDataWidth);
 Integer axi_lite_addr_width=valueOf(AxiLiteAddrWidth);
 
+typedef struct{
+    Bit#(48) dst_mac;
+    Bit#(48) src_mac;
+    Bit#(32) dst_ip;
+    Bit#(32) src_ip;
+    Bit#(16) dst_port;
+    Bit#(16) src_port;
+    Bit#(16) ipv4_checksum;
+}PktHdr deriving(Eq, Bits, FShow);
+
 typedef struct {
     Vector#(32, Bit#(16)) value;
 }RfDCFrame deriving(Eq, Bits);
@@ -43,34 +53,18 @@ instance FShow#(RfDCFrame);
     endfunction
 endinstance
 
-
+interface PktHdrCfgee;
+    (*always_enabled, always_ready*)
+    method Action pkt_hdr(PktHdr hdr);
+endinterface
 
 interface RfdcPacker;
      (* prefix="s_axis" *)
     interface AXI4_Stream_Rd_Fab#(AxisDataWidth, 0) s_axis_fab;
 
     interface Get#(AXI4_Stream_Pkg#(AxisDataWidth, 0)) get;
-    
-    method Action set_src_mac(Bit#(48) v);
-    method Action set_dst_mac(Bit#(48) v);
-    method Action set_src_ip(Bit#(32) v);
-    method Action set_dst_ip(Bit#(32) v);
-    method Action set_src_port(Bit#(16) v);
-    method Action set_dst_port(Bit#(16) v);
 
-    method Action set_reg(Bit#(8) addr, Bit#(32) v);
-
-    method Bit#(48) get_src_mac();
-    method Bit#(48) get_dst_mac();
-    method Bit#(32) get_src_ip();
-    method Bit#(32) get_dst_ip();
-    method Bit#(16) get_src_port();
-    method Bit#(16) get_dst_port();
-
-    method Bit#(32) get_reg(Bit#(8) addr);
-
-    //(*always_enabled, always_ready*)
-    method Action configured(Bool v);
+    interface PktHdrCfgee cfg;
 endinterface
 
 typedef Bit#(112) EtherHdr;
@@ -80,8 +74,8 @@ function EtherHdr eth_hdr(Bit#(48) dst_mac, Bit#(48) src_mac);
         16'h0008
         //,src_mac[7:0],src_mac[15:8],src_mac[23:16],src_mac[31:24],src_mac[39:32],src_mac[47:40]
         //,dst_mac[7:0],dst_mac[15:8],dst_mac[23:16],dst_mac[31:24],dst_mac[39:32],dst_mac[47:40]
-        , toggle_endianness(src_mac)
-        , toggle_endianness(dst_mac)
+        , src_mac
+        , dst_mac
     };
 endfunction
 
@@ -125,7 +119,7 @@ typedef Bit#(160) IPv4Hdr;
 
 interface IPv4HdrCheckSum;
     method Action put(Bit#(32) dst_ip, Bit#(32) src_ip);
-    method Bit#(160) get;
+    method Bit#(16) get;
 endinterface
 
 
@@ -134,8 +128,8 @@ function Bit#(64) udp_hdr(Bit#(16) dst_port, Bit#(16) src_port, UInt#(16) payloa
     return {
         16'h0,
         toggle_endianness(pack(payload_length1+8)),
-        toggle_endianness(dst_port),
-        toggle_endianness(src_port)
+        dst_port,
+        src_port
     };
 endfunction
 
@@ -172,11 +166,13 @@ instance Bits#(MetaData, 256);
     endfunction
 endinstance
 
-function MetaData compose_metadata(Bit#(64) pkt_cnt);
+
+
+function MetaData compose_metadata(Bit#(64) pkt_cnt, Bit#(32) port_id);
     return MetaData{
         head_magic: 32'haa55aa55,
         version: 32'h11223344,
-        port_id: 0,
+        port_id: port_id,
         data_type: 16,
         pkt_cnt: pkt_cnt,
         tail_magic: 64'haa55aa55_44332211
@@ -210,10 +206,10 @@ module mkIPv4HdrCheckSum(IPv4HdrCheckSum);
     Bit#(160) unchecked={
         //[159:128]
         //dst_ip[7:0],dst_ip[15:8],dst_ip[23:16],dst_ip[31:24],
-        toggle_endianness(dst_ip_)
+        dst_ip_
         //[127:96]
         //src_ip[7:0],src_ip[15:8],src_ip[23:16],src_ip[31:24],
-        ,toggle_endianness(src_ip_)
+        ,src_ip_
         //[95:64]
         ,16'h0 //checksum
         ,8'd17 //udp
@@ -253,7 +249,7 @@ module mkIPv4HdrCheckSum(IPv4HdrCheckSum);
         src_ip_<=src_ip;
         fsm.start();
     endmethod
-    method Bit#(160) get if(fsm.done())=result;
+    method Bit#(16) get=pack(checksum);
 endmodule
 
 
@@ -265,40 +261,18 @@ typedef enum{
     PktLast
 }PktState deriving(Eq, Bits, FShow);
 
-(*synthesize*)
-module mkRfdcPacker(RfdcPacker);
+
+module mkRfdcPacker#(Integer port_id)(RfdcPacker);
     AXI4_Stream_Rd#(AxisDataWidth, 0) s_axis<-mkAXI4_Stream_Rd(4);
 
     Reg#(Bit#(AxisDataWidth)) stage1<-mkReg(0);
     Reg#(Bit#(AxisDataWidth)) stage2<-mkReg(0);
     Reg#(Bit#(AxisDataWidth)) inBuffer<-mkReg(0);
-    Reg#(Bool) phase <-mkReg(False);
 
-    
-    Bit#(8) dst_mac_addr_hi_32=8'h04;
-    Bit#(8) dst_mac_addr_lo_16=8'h08;
-    Reg#(Bit#(48)) dst_mac<-mkReg(0);
-
-    Bit#(8) src_mac_addr_hi_32=8'h0c;
-    Bit#(8) src_mac_addr_lo_16=8'h10;
-    Reg#(Bit#(48)) src_mac<-mkReg(0);
-    
-    Bit#(8) dst_ip_addr=8'h14;
-    Reg#(Bit#(32)) dst_ip<-mkReg(0);
-
-    Bit#(8) src_ip_addr=8'h18;
-    Reg#(Bit#(32)) src_ip<-mkReg(0);
-
-    Bit#(8) dst_port_addr=8'h1c;
-    Reg#(Bit#(16)) dst_port<-mkReg(0);
-
-    Bit#(8) src_port_addr=8'h20;
-    Reg#(Bit#(16)) src_port<-mkReg(0);
-
-    
+    Wire#(PktHdr) _pkt_hdr<-mkBypassWire;
     
     //Reg#(Bit#(64)) cnt<-mkReg(0);
-    Reg#(MetaData) meta_data<-mkReg(compose_metadata(0));
+    Reg#(MetaData) meta_data<-mkReg(compose_metadata(0, fromInteger(port_id)));
     Reg#(Bit#(8)) iter_i<-mkReg(0);
     Reg#(PktState) state<-mkReg(PktHead1);
 
@@ -313,35 +287,41 @@ module mkRfdcPacker(RfdcPacker);
     FIFO#(AXI4_Stream_Pkg#(AxisDataWidth, 0)) out_fifo<-mkSizedFIFO(4);
     //SyncFIFOIfc#(AXI4_Stream_Pkg#(AxisDataWidth, 0)) out_fifo <- mkSyncFIFO(4, current_clk, current_rst, current_clk);
 
-    Reg#(Bool) configured_<-mkReg(False);
-    Reg#(Bool) old_configured_<-mkReg(False);
-    Reg#(Bool) ipv4_hdr_updated<-mkReg(False);
+    Bit#(160) ipv4_hdr=
+        {
+            //[159:128]
+            //dst_ip[7:0],dst_ip[15:8],dst_ip[23:16],dst_ip[31:24],
+            _pkt_hdr.dst_ip
+            //[127:96]
+            //src_ip[7:0],src_ip[15:8],src_ip[23:16],src_ip[31:24],
+            ,_pkt_hdr.src_ip
+            //[95:64]
+            ,_pkt_hdr.ipv4_checksum
+            ,8'd17 //udp
+            ,8'hff//ttl
+
+            //[63:32]
+            ,16'b0000_0000_010_00000 //flags+fragment offset
+            ,16'h0 //identification
+
+            //31:0
+            ,toggle_endianness(pack((udp_user_data_length_in_bytes+8+20)))
+            ,8'h00//dscp+ecn
+            ,8'h45//version+ihl
+        };
+
+
 
     //Probe#(PktState) state_probe<-mkProbe;
-    Reg#(IPv4Hdr) ipv4_hdr<-mkReg(0);
     Bit#(336) net_header={
-        udp_hdr(dst_port,src_port,udp_user_data_length_in_bytes),
+        udp_hdr(_pkt_hdr.dst_port,_pkt_hdr.src_port,udp_user_data_length_in_bytes),
         ipv4_hdr,
-        eth_hdr(dst_mac, src_mac)
+        eth_hdr(_pkt_hdr.dst_mac, _pkt_hdr.src_mac)
     };
     
-    IPv4HdrCheckSum ipv4_checksum<-mkIPv4HdrCheckSum;
+    
 
     rule each;
-        old_configured_<=configured_;
-        if(!old_configured_) begin
-            meta_data.pkt_cnt<=0;
-            //net_header<=calc_net_header();
-            //ipv4_hdr<=ipv4_checksum.get;
-            ipv4_checksum.put(dst_ip, src_ip);
-            ipv4_hdr_updated<=False;
-        end
-        else if(!ipv4_hdr_updated)
-        begin
-            ipv4_hdr<=ipv4_checksum.get;
-            ipv4_hdr_updated<=True;
-        end
-        else
         begin
             case (state)
                 PktHead1:begin
@@ -487,70 +467,19 @@ module mkRfdcPacker(RfdcPacker);
     //interface AXI4_Stream_Wr_Fab m_axis_fab=m_axis.fab;
     interface get=toGet(out_fifo);
     
-    method Action set_src_mac(Bit#(48) v);
-        src_mac<=v;
-    endmethod
-    method Action set_dst_mac(Bit#(48) v);
-        dst_mac<=v;
-    endmethod
-    method Action set_src_ip(Bit#(32) v);
-        src_ip<=v;
-    endmethod
-    method Action set_dst_ip(Bit#(32) v);
-        dst_ip<=v;
-    endmethod
-    method Action set_src_port(Bit#(16) v);
-        src_port<=v;
-    endmethod
-    method Action set_dst_port(Bit#(16) v);
-        dst_port<=v;
-    endmethod
-
-    method Action set_reg(Bit#(8) addr, Bit#(32) v);
-        case (addr)
-            dst_mac_addr_hi_32:dst_mac[47:16]<=v;
-            dst_mac_addr_lo_16:dst_mac[15:0]<=v[15:0];
-            src_mac_addr_hi_32:src_mac[47:16]<=v;
-            src_mac_addr_lo_16:src_mac[15:0]<=v[15:0];
-            dst_ip_addr: dst_ip<=v;
-            src_ip_addr: src_ip<=v;
-            dst_port_addr: dst_port<=v[15:0];
-            src_port_addr: src_port<=v[15:0];
-        endcase
-    endmethod
-
-    method Bit#(48) get_src_mac=src_mac;
-    method Bit#(48) get_dst_mac=dst_mac;
-    method Bit#(32) get_src_ip=src_ip;
-    method Bit#(32) get_dst_ip=dst_ip;
-    method Bit#(16) get_src_port=src_port;
-    method Bit#(16) get_dst_port=dst_port;
-
-    method Bit#(32) get_reg(Bit#(8) addr);
-        let x=case (addr)
-            dst_mac_addr_hi_32:dst_mac[47:16];
-            dst_mac_addr_lo_16:extend(dst_mac[15:0]);
-            src_mac_addr_hi_32:src_mac[47:16];
-            src_mac_addr_lo_16:extend(src_mac[15:0]);
-            dst_ip_addr: dst_ip;
-            src_ip_addr: src_ip;
-            dst_port_addr: extend(dst_port);
-            src_port_addr: extend(src_port);
-            default: 32'hffffffff;
-        endcase;
-        return x;
-    endmethod
-
-    method Action configured(Bool v);
-        configured_<=v;
-    endmethod
+    interface PktHdrCfgee cfg;
+        method Action pkt_hdr(PktHdr hdr);
+            _pkt_hdr<=hdr;
+        endmethod
+    endinterface
+    
 endmodule
 
+
+
 interface RfdcPackerN#(numeric type n_inputs);
-    (*prefix="s_axi"*)
-    interface AXI4_Lite_Slave_Rd_Fab#(AxiLiteAddrWidth, AxiLiteDataWidth) s_axi_rd_fab;
-    (*prefix="s_axi"*)
-    interface AXI4_Lite_Slave_Wr_Fab#(AxiLiteAddrWidth, AxiLiteDataWidth) s_axi_wr_fab;
+    (*prefix="cfg"*)
+    interface Vector#(n_inputs, PktHdrCfgee) cfg;
 
     (* prefix="m_axis" *)
     interface AXI4_Stream_Wr_Fab#(AxisDataWidth, 0) m_axis_fab;
@@ -558,8 +487,6 @@ interface RfdcPackerN#(numeric type n_inputs);
     (* prefix="s_axis" *)
     interface Vector#(n_inputs,AXI4_Stream_Rd_Fab#(AxisDataWidth, 0)) s_axis_fab;
     
-    (*always_enabled,always_ready*)
-    method Bool configured;
 endinterface
 
 
@@ -571,13 +498,12 @@ endfunction
 module mkRfdcPackerN(RfdcPackerN#(n));
     Clock current_clk<-exposeCurrentClock;
     Reset current_rst<-exposeCurrentReset;
+    
 
-    Vector#(n, RfdcPacker) packers<-replicateM(mkRfdcPacker);
+    Vector#(n, RfdcPacker) packers<-genWithM(mkRfdcPacker);
     AXI4_Stream_Wr#(AxisDataWidth,0) m_axis <-mkAXI4_Stream_Wr(4);
-    AXI4_Lite_Slave_Rd#(AxiLiteAddrWidth,AxiLiteDataWidth) s_axi_rd<-mkAXI4_Lite_Slave_Rd(2);
-    AXI4_Lite_Slave_Wr#(AxiLiteAddrWidth,AxiLiteDataWidth) s_axi_wr<-mkAXI4_Lite_Slave_Wr(2);
+    
     Reg#(UInt#(8)) input_idx<-mkReg(0);
-    Reg#(Bool) _configured <- mkReg(False);
 
     rule each;
         let d<-packers[input_idx].get.get();
@@ -588,246 +514,43 @@ module mkRfdcPackerN(RfdcPackerN#(n));
         end
     endrule
 
-    function Bool is_valid_addr(Bit#(3) sel);
-        return fromInteger(valueOf(n)-1) >= sel;
+    function PktHdrCfgee extract_cfg(RfdcPacker x);
+        return x.cfg;
     endfunction
-
-    Reg#(Bit#(3)) write_sel<-mkReg(0);
-    Reg#(Bit#(8)) write_addr<-mkReg(0);
-    Reg#(Bit#(32)) write_value<-mkReg(0);
-
-    Reg#(Bit#(3)) read_sel<-mkReg(0);
-    Reg#(Bit#(8)) read_addr<-mkReg(0);
-    Reg#(Bit#(32)) read_value<-mkReg(0);
-
-    rule update_config;
-        for(Integer i=0;i<valueOf(n);i=i+1)packers[i].configured(_configured);
-    endrule
-
-
     
-    // rule read_cfg;
-    //     let rq<-s_axi_rd.request.get();
-    //     Bit#(11) addr=rq.addr;
-    //     Bit#(3) sel=addr[10:8];
-    //     Bit#(8) addr1=addr[7:0];
-    //     if(is_valid_addr(addr))begin
-    //         Bit#(32) result=packers[sel].get_reg(addr1);
-    //         let rp=AXI4_Lite_Read_Rs_Pkg{
-    //             data: result,
-    //             resp: OKAY
-    //         };
-    //         s_axi_rd.response.put(rp);
-    //     end
-    //     else
-    //         s_axi_rd.response.put(
-    //             AXI4_Lite_Read_Rs_Pkg{
-    //                 data:0,
-    //                 resp: DECERR
-    //             }
-    //         );
-    // endrule
-
-    // rule write_cfg;
-    //     let rq<-s_axi_wr.request.get();
-    //     Bit#(11) addr=rq.addr;
-    //     Bit#(32) data=rq.data;
-    //     Bit#(3) sel=addr[10:8];
-    //     Bit#(8) addr1=addr[7:0];
-    //     if(is_valid_addr(addr))begin
-    //         packers[sel].set_reg(addr1,data);
-    //         s_axi_wr.response.put(AXI4_Lite_Write_Rs_Pkg{
-    //             resp: OKAY
-    //         });
-    //     end
-    //     else
-    //         s_axi_wr.response.put(AXI4_Lite_Write_Rs_Pkg{
-    //             resp: DECERR
-    //         });
-    // endrule
-    
-    mkAutoFSM(
-        seq            
-            while(True)seq
-                action
-                    let rq<-s_axi_rd.request.get();
-                    read_addr<=rq.addr[7:0];
-                    read_sel<=rq.addr[10:8];
-                endaction
-                if(read_sel==0 && read_addr==0)seq
-                    s_axi_rd.response.put(AXI4_Lite_Read_Rs_Pkg{
-                        data: pack(extend(pack(_configured))),
-                        resp: OKAY
-                    });
-                endseq
-                else if(is_valid_addr(read_sel))seq
-                    read_value<=packers[read_sel].get_reg(read_addr);
-                    s_axi_rd.response.put(AXI4_Lite_Read_Rs_Pkg{
-                        data: read_value,
-                        resp: OKAY
-                    });
-                endseq
-                else
-                    s_axi_rd.response.put(
-                        AXI4_Lite_Read_Rs_Pkg{
-                            data:0,
-                            resp: DECERR
-                        }
-                    );
-            endseq        
-        endseq
-    );
-
-    mkAutoFSM(
-        seq            
-            while(True)seq
-                action
-                    let rq<-s_axi_wr.request.get();
-                    write_addr<=rq.addr[7:0];
-                    write_sel<=rq.addr[10:8];
-                    write_value<=rq.data;
-                endaction
-                if(write_sel==0 && write_addr==0)seq
-                    _configured<=write_value[0]==1;
-                    s_axi_wr.response.put(AXI4_Lite_Write_Rs_Pkg{
-                        resp: OKAY
-                    });
-                endseq
-                else if(is_valid_addr(write_sel))seq
-                    packers[write_sel].set_reg(write_addr, write_value);
-                    s_axi_wr.response.put(AXI4_Lite_Write_Rs_Pkg{
-                        resp: OKAY
-                    });
-                endseq
-                else
-                    s_axi_wr.response.put(
-                        AXI4_Lite_Write_Rs_Pkg{
-                            resp: DECERR
-                        }
-                    );
-            endseq        
-        endseq
-    );
-
-
     interface s_axis_fab=map(extract_axis_fab, packers);
-    interface s_axi_rd_fab = s_axi_rd.fab;
-    interface s_axi_wr_fab = s_axi_wr.fab;
     interface m_axis_fab=m_axis.fab;
+    interface cfg=map(extract_cfg, packers);
 
-    method Bool configured=_configured;
 endmodule
 
 
-interface AutoRfdcPackerN#(numeric type n_inputs);
-    (* prefix="m_axis" *)
-    interface AXI4_Stream_Wr_Fab#(AxisDataWidth, 0) m_axis_fab;
-
-    (* prefix="s_axis" *)
-    interface Vector#(n_inputs,AXI4_Stream_Rd_Fab#(AxisDataWidth, 0)) s_axis_fab;
+interface PktHdrCfger;
+    (*always_enabled, always_ready*)
+    method PktHdr value;
 endinterface
 
-module mkAutoRfdcPackerN(AutoRfdcPackerN#(n));
-    AXI4_Lite_Master_Wr#(AxiLiteAddrWidth, 32) axi4_lite_wr<-mkAXI4_Lite_Master_Wr(2);
-    AXI4_Lite_Master_Rd#(AxiLiteAddrWidth, 32) axi4_lite_rd<-mkAXI4_Lite_Master_Rd(2);
-    RfdcPackerN#(n) packers<-mkRfdcPackerN;
-    
-    Reg#(Bit#(8)) i<-mkReg(0);
-
-    mkConnection(axi4_lite_wr.fab, packers.s_axi_wr_fab);
-    mkConnection(axi4_lite_rd.fab, packers.s_axi_rd_fab);
-
-    function Stmt config_packer(Bit#(3) sel, Bit#(8) addr, Bit#(32) value);
-        return seq
-        axi4_lite_wr.request.put(AXI4_Lite_Write_Rq_Pkg{
-            addr: {0, sel, addr},
-            data: value, 
-            strb: 4'hf,
-            prot: PRIV_INSECURE_INSTRUCTION
-        });
-        action
-            let r<-axi4_lite_wr.response.get();
-            $display("resp: ",r);
-        endaction
-        endseq;
-    endfunction
-
-    
-    
-    mkAutoFSM(
-        seq
-            while(True)seq
-                await(!packers.configured);
-                for(i<=0;i!=fromInteger(valueOf(n));i<=i+1)
-                seq
-                    config_packer(truncate(i), 8'h04, 32'h10_70_fd_b3);
-                    config_packer(truncate(i), 8'h08, 32'h00_00_68_de);
-                    config_packer(truncate(i), 8'h0c, 32'h10_70_fd_b3);
-                    config_packer(truncate(i), 8'h10, 32'h00_00_68_11);
-
-                    config_packer(truncate(i), 8'h14, 32'h0a_64_0b_01);
-                    config_packer(truncate(i), 8'h18, 32'h0a_64_0b_10);
-                    config_packer(truncate(i), 8'h1c, {24'h00_00_11, i});
-                    config_packer(truncate(i), 8'h20, {24'h00_00_12, i});
-                endseq
-                config_packer(0, 0, 32'h1);
-            endseq
-        endseq
-    );
-
-
-    interface m_axis_fab=packers.m_axis_fab;
-    interface s_axis_fab=packers.s_axis_fab;
-endmodule
-
-(*synthesize*)
-module mkAutoRfdcPacker2(AutoRfdcPackerN#(2));
-    AutoRfdcPackerN#(2) packers<-mkAutoRfdcPackerN;
-    return packers;
-endmodule
-
-(*synthesize*)
-module mkAutoRfdcPacker4(AutoRfdcPackerN#(4));
-    AutoRfdcPackerN#(4) packers<-mkAutoRfdcPackerN;
-    return packers;
-endmodule
-
-(*synthesize*)
-module mkAutoRfdcPacker8(AutoRfdcPackerN#(8));
-    AutoRfdcPackerN#(8) packers<-mkAutoRfdcPackerN;
-    return packers;
-endmodule
 
 interface RfdcPackerNCfg#(numeric type n_inputs);
-    (*always_enabled, always_ready*)
-    method Action configured(Bool x);
-    (*prefix="m_axi"*)
-    interface AXI4_Lite_Master_Rd_Fab#(AxiLiteAddrWidth, AxiLiteDataWidth) m_axi_rd_fab;
-    (*prefix="m_axi"*)
-    interface AXI4_Lite_Master_Wr_Fab#(AxiLiteAddrWidth, AxiLiteDataWidth) m_axi_wr_fab;
-
     (*prefix="s_axi"*)
     interface AXI4_Lite_Slave_Rd_Fab#(AxiLiteAddrWidth, AxiLiteDataWidth) s_axi_rd_fab;
     (*prefix="s_axi"*)
     interface AXI4_Lite_Slave_Wr_Fab#(AxiLiteAddrWidth, AxiLiteDataWidth) s_axi_wr_fab;
+
+    (*prefix="cfg"*)
+    interface Vector#(n_inputs, PktHdrCfger) cfg;
 endinterface
 
 
-typedef struct{
-    Bit#(48) dst_mac;
-    Bit#(48) src_mac;
-    Bit#(32) dst_ip;
-    Bit#(32) src_ip;
-    Bit#(16) dst_port;
-    Bit#(16) src_port;
-}PktHdr deriving(Eq, Bits, FShow);
+
 
 module mkRfdcPackerNCfg(RfdcPackerNCfg#(n));
-    AXI4_Lite_Master_Wr#(AxiLiteAddrWidth, 32) axi4_master_lite_wr<-mkAXI4_Lite_Master_Wr(2);
-    AXI4_Lite_Master_Rd#(AxiLiteAddrWidth, 32) axi4_master_lite_rd<-mkAXI4_Lite_Master_Rd(2);
-
     AXI4_Lite_Slave_Wr#(AxiLiteAddrWidth, 32) axi4_slave_lite_wr<-mkAXI4_Lite_Slave_Wr(2);
     AXI4_Lite_Slave_Rd#(AxiLiteAddrWidth, 32) axi4_slave_lite_rd<-mkAXI4_Lite_Slave_Rd(2);
+
+    Vector#(n, IPv4HdrCheckSum) cks<-replicateM(mkIPv4HdrCheckSum);
+
+
 
     Vector#(n, Reg#(PktHdr)) pkt_hdrs <- replicateM(mkReg(PktHdr{
         dst_mac: 48'ha5a5a5a5a5a5,
@@ -835,29 +558,45 @@ module mkRfdcPackerNCfg(RfdcPackerNCfg#(n));
         dst_ip: 32'h0a0a0a0a,
         src_ip: 32'ha0a0a0a0,
         dst_port: 16'h 1122,
-        src_port: 16'h 3344
+        src_port: 16'h 3344,
+        ipv4_checksum: 16'h0
     }));
+
+    Vector#(n, Reg#(PktHdr)) pkt_hdrs_checked <- replicateM(mkReg(PktHdr{
+        dst_mac: 48'ha5a5a5a5a5a5,
+        src_mac: 48'h5555aaaa5555,
+        dst_ip: 32'h0a0a0a0a,
+        src_ip: 32'ha0a0a0a0,
+        dst_port: 16'h 1122,
+        src_port: 16'h 3344,
+        ipv4_checksum: 16'h0
+    }));
+
     Reg#(Bit#(32)) axi4_data_buf<-mkReg(?);
     
     Reg#(Bit#(8)) i<-mkReg(0);
-    Wire#(Bool) _configured<-mkBypassWire;
 
+    rule checksum;
+        for(Integer i=0;i!=valueOf(n);i=i+1)begin
+            cks[i].put(pkt_hdrs[i].dst_ip, pkt_hdrs[i].src_ip);
+        end
+    endrule
 
-    function Stmt config_packer(Bit#(3) sel, Bit#(8) addr, Bit#(32) value);
-        return seq
-        axi4_master_lite_wr.request.put(AXI4_Lite_Write_Rq_Pkg{
-            addr: {0, sel, addr},
-            data: value, 
-            strb: 4'hf,
-            prot: PRIV_INSECURE_INSTRUCTION
-        });
-        action
-            let r<-axi4_master_lite_wr.response.get();
-            $display("resp: ",r);
-        endaction
-        endseq;
-    endfunction
+    rule get_checksum;
+        for(Integer i=0;i!=valueOf(n);i=i+1)begin
+            pkt_hdrs_checked[i]<=PktHdr{
+                dst_mac: pkt_hdrs[i].dst_mac,
+                src_mac: pkt_hdrs[i].src_mac,
+                dst_ip: pkt_hdrs[i].dst_ip,
+                src_ip: pkt_hdrs[i].src_ip,
+                dst_port: pkt_hdrs[i].dst_port,
+                src_port: pkt_hdrs[i].src_port,
+                ipv4_checksum: cks[i].get()
+            };
+        end
+    endrule
 
+    
     mkAutoFSM(//recv cfg
         seq
             while(True)
@@ -867,11 +606,11 @@ module mkRfdcPackerNCfg(RfdcPackerNCfg#(n));
                     let sel=req.addr[11:8];
                     let addr=req.addr[7:0];
                     case (addr) matches
-                        8'h04: pkt_hdrs[sel].dst_mac[47:16]<=req.data;
-                        8'h08: pkt_hdrs[sel].dst_mac[15:0]<=req.data[15:0];
+                        8'h04: pkt_hdrs[sel].dst_mac[31:0]<=req.data;
+                        8'h08: pkt_hdrs[sel].dst_mac[47:32]<=req.data[15:0];
                         
-                        8'h0c: pkt_hdrs[sel].src_mac[47:16]<=req.data;
-                        8'h10: pkt_hdrs[sel].src_mac[15:0]<=req.data[15:0];
+                        8'h0c: pkt_hdrs[sel].src_mac[31:0]<=req.data;
+                        8'h10: pkt_hdrs[sel].src_mac[47:32]<=req.data[15:0];
                         8'h14: pkt_hdrs[sel].dst_ip <=req.data;
                         8'h18: pkt_hdrs[sel].src_ip <=req.data;
                         8'h1c: pkt_hdrs[sel].dst_port <= req.data[15:0];
@@ -896,11 +635,11 @@ module mkRfdcPackerNCfg(RfdcPackerNCfg#(n));
                     let sel=req.addr[11:8];
                     let addr=req.addr[7:0];
                     case (addr) matches
-                        8'h04: axi4_data_buf<=pkt_hdrs[sel].dst_mac[47:16];
-                        8'h08: axi4_data_buf<={16'h0, pkt_hdrs[sel].dst_mac[15:0]};
+                        8'h04: axi4_data_buf<=pkt_hdrs[sel].dst_mac[31:0];
+                        8'h08: axi4_data_buf<={16'h0, pkt_hdrs[sel].dst_mac[47:32]};
 
-                        8'h0c: axi4_data_buf<=pkt_hdrs[sel].src_mac[47:16];
-                        8'h10: axi4_data_buf<={16'h0, pkt_hdrs[sel].src_mac[15:0]};
+                        8'h0c: axi4_data_buf<=pkt_hdrs[sel].src_mac[31:0];
+                        8'h10: axi4_data_buf<={16'h0, pkt_hdrs[sel].src_mac[47:32]};
                         8'h14: axi4_data_buf<=pkt_hdrs[sel].dst_ip;
                         8'h18: axi4_data_buf<=pkt_hdrs[sel].src_ip;
                         8'h1c: axi4_data_buf<={16'h0, pkt_hdrs[sel].dst_port};
@@ -917,49 +656,21 @@ module mkRfdcPackerNCfg(RfdcPackerNCfg#(n));
         endseq
     );
 
+    function PktHdrCfger extract_cfg(Reg#(PktHdr) x);
+        return(
+            interface PktHdrCfger;
+                method PktHdr value= x;
+            endinterface
+        );
+    endfunction
 
-    
-    
-    mkAutoFSM(
-        seq
-            while(True)seq
-                await(!_configured);
-                noAction;
-                for(i<=0;i!=fromInteger(valueOf(n));i<=i+1)
-                seq
-                    // config_packer(truncate(i), 8'h04, 32'h10_70_fd_b3);
-                    // config_packer(truncate(i), 8'h08, 32'h00_00_68_de);
-                    // config_packer(truncate(i), 8'h0c, 32'h10_70_fd_b3);
-                    // config_packer(truncate(i), 8'h10, 32'h00_00_68_11);
-
-                    // config_packer(truncate(i), 8'h14, 32'h0a_64_0b_01);
-                    // config_packer(truncate(i), 8'h18, 32'h0a_64_0b_10);
-                    // config_packer(truncate(i), 8'h1c, {24'h00_00_11, i});
-                    // config_packer(truncate(i), 8'h20, {24'h00_00_12, i});
-                    config_packer(truncate(i), 8'h04, pkt_hdrs[i].dst_mac[47:16]);
-                    config_packer(truncate(i), 8'h08, {16'h00, pkt_hdrs[i].dst_mac[15:0]});
-                    config_packer(truncate(i), 8'h0c, pkt_hdrs[i].src_mac[47:16]);
-                    config_packer(truncate(i), 8'h10, {16'h00, pkt_hdrs[i].src_mac[15:0]});
-
-                    config_packer(truncate(i), 8'h14, pkt_hdrs[i].dst_ip);
-                    config_packer(truncate(i), 8'h18, pkt_hdrs[i].src_ip);
-                    config_packer(truncate(i), 8'h1c, {16'h00, pkt_hdrs[i].dst_port});
-                    config_packer(truncate(i), 8'h20, {16'h00, pkt_hdrs[i].src_port});
-                endseq
-                config_packer(0, 0, 32'h1);
-            endseq
-        endseq
-    );
-
-    interface m_axi_wr_fab=axi4_master_lite_wr.fab;
-    interface m_axi_rd_fab=axi4_master_lite_rd.fab;
-
-    interface s_axi_wr_fab=axi4_slave_lite_wr.fab;
     interface s_axi_rd_fab=axi4_slave_lite_rd.fab;
+    interface s_axi_wr_fab=axi4_slave_lite_wr.fab;
 
-    method Action configured(Bool x);
-        _configured<=x;
-    endmethod
+    interface cfg=map(
+        extract_cfg
+        , pkt_hdrs_checked);
+
 endmodule
 
 

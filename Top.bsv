@@ -156,10 +156,28 @@ endmodule
 
 module mkTop(Empty);
     FakeSrc src<-mkFakeSrc;
-    AutoRfdcPackerN#(1) packer<-mkAutoRfdcPackerN;
+    //AutoRfdcPackerN#(1) packer<-mkAutoRfdcPackerN;
+    RfdcPackerN#(1) packer<-mkRfdcPackerN;
+    RfdcPackerNCfg#(1) cfg<-mkRfdcPackerNCfg;
+
+    AXI4_Lite_Master_Wr#(12, 32) axi4_lite_wr<-mkAXI4_Lite_Master_Wr(2);
+    AXI4_Lite_Master_Rd#(12, 32) axi4_lite_rd<-mkAXI4_Lite_Master_Rd(2);
+
+
+
     AXI4_Stream_Rd#(512,0) axis_rd<-mkAXI4_Stream_Rd(2);
     mkConnection(src.m_axis_fab, packer.s_axis_fab[0]);
     mkConnection(packer.m_axis_fab, axis_rd.fab);
+    mkConnection(axi4_lite_wr.fab, cfg.s_axi_wr_fab);
+    mkConnection(axi4_lite_rd.fab, cfg.s_axi_rd_fab);
+
+    rule cfg1;
+        for(Integer i=0;i<1;i=i+1)begin
+            packer.cfg[i].pkt_hdr(cfg.cfg[i].value);
+        end
+    endrule
+
+    
 
 
     mkAutoFSM(
