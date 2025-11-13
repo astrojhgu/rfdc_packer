@@ -801,15 +801,43 @@ endmodule
 interface RfdcPackerNCfg#(numeric type n_inputs);
     (*always_enabled, always_ready*)
     method Action configured(Bool x);
+    (*prefix="m_axi"*)
+    interface AXI4_Lite_Master_Rd_Fab#(AxiLiteAddrWidth, AxiLiteDataWidth) m_axi_rd_fab;
+    (*prefix="m_axi"*)
+    interface AXI4_Lite_Master_Wr_Fab#(AxiLiteAddrWidth, AxiLiteDataWidth) m_axi_wr_fab;
+
     (*prefix="s_axi"*)
-    interface AXI4_Lite_Master_Rd_Fab#(AxiLiteAddrWidth, AxiLiteDataWidth) s_axi_rd_fab;
+    interface AXI4_Lite_Slave_Rd_Fab#(AxiLiteAddrWidth, AxiLiteDataWidth) s_axi_rd_fab;
     (*prefix="s_axi"*)
-    interface AXI4_Lite_Master_Wr_Fab#(AxiLiteAddrWidth, AxiLiteDataWidth) s_axi_wr_fab;
+    interface AXI4_Lite_Slave_Wr_Fab#(AxiLiteAddrWidth, AxiLiteDataWidth) s_axi_wr_fab;
 endinterface
 
+
+typedef struct{
+    Bit#(48) dst_mac;
+    Bit#(48) src_mac;
+    Bit#(32) dst_ip;
+    Bit#(32) src_ip;
+    Bit#(16) dst_port;
+    Bit#(16) src_port;
+}PktHdr deriving(Eq, Bits, FShow);
+
 module mkRfdcPackerNCfg(RfdcPackerNCfg#(n));
-    AXI4_Lite_Master_Wr#(AxiLiteAddrWidth, 32) axi4_lite_wr<-mkAXI4_Lite_Master_Wr(2);
-    AXI4_Lite_Master_Rd#(AxiLiteAddrWidth, 32) axi4_lite_rd<-mkAXI4_Lite_Master_Rd(2);
+    AXI4_Lite_Master_Wr#(AxiLiteAddrWidth, 32) axi4_master_lite_wr<-mkAXI4_Lite_Master_Wr(2);
+    AXI4_Lite_Master_Rd#(AxiLiteAddrWidth, 32) axi4_master_lite_rd<-mkAXI4_Lite_Master_Rd(2);
+
+    AXI4_Lite_Slave_Wr#(AxiLiteAddrWidth, 32) axi4_slave_lite_wr<-mkAXI4_Lite_Slave_Wr(2);
+    AXI4_Lite_Slave_Rd#(AxiLiteAddrWidth, 32) axi4_slave_lite_rd<-mkAXI4_Lite_Slave_Rd(2);
+
+    Vector#(n, Reg#(PktHdr)) pkt_hdrs <- replicateM(mkReg(PktHdr{
+        dst_mac: 48'ha5a5a5a5a5a5,
+        src_mac: 48'h5555aaaa5555,
+        dst_ip: 32'h0a0a0a0a,
+        src_ip: 32'ha0a0a0a0,
+        dst_port: 16'h 1122,
+        src_port: 16'h 3344
+    }));
+    Reg#(Bit#(32)) axi4_data_buf<-mkReg(?);
     
     Reg#(Bit#(8)) i<-mkReg(0);
     Wire#(Bool) _configured<-mkBypassWire;
@@ -817,18 +845,78 @@ module mkRfdcPackerNCfg(RfdcPackerNCfg#(n));
 
     function Stmt config_packer(Bit#(3) sel, Bit#(8) addr, Bit#(32) value);
         return seq
-        axi4_lite_wr.request.put(AXI4_Lite_Write_Rq_Pkg{
+        axi4_master_lite_wr.request.put(AXI4_Lite_Write_Rq_Pkg{
             addr: {0, sel, addr},
             data: value, 
             strb: 4'hf,
             prot: PRIV_INSECURE_INSTRUCTION
         });
         action
-            let r<-axi4_lite_wr.response.get();
+            let r<-axi4_master_lite_wr.response.get();
             $display("resp: ",r);
         endaction
         endseq;
     endfunction
+
+    mkAutoFSM(//recv cfg
+        seq
+            while(True)
+            seq
+                action
+                    let req<-axi4_slave_lite_wr.request.get();
+                    let sel=req.addr[11:8];
+                    let addr=req.addr[7:0];
+                    case (addr) matches
+                        8'h04: pkt_hdrs[sel].dst_mac[47:16]<=req.data;
+                        8'h08: pkt_hdrs[sel].dst_mac[15:0]<=req.data[15:0];
+                        
+                        8'h0c: pkt_hdrs[sel].src_mac[47:16]<=req.data;
+                        8'h10: pkt_hdrs[sel].src_mac[15:0]<=req.data[15:0];
+                        8'h14: pkt_hdrs[sel].dst_ip <=req.data;
+                        8'h18: pkt_hdrs[sel].src_ip <=req.data;
+                        8'h1c: pkt_hdrs[sel].dst_port <= req.data[15:0];
+                        8'h20: pkt_hdrs[sel].src_port <= req.data[15:0];
+                    endcase
+                endaction
+                axi4_slave_lite_wr.response.put(
+                    AXI4_Lite_Write_Rs_Pkg{
+                    resp: OKAY
+                }
+                );
+            endseq
+        endseq
+    );
+
+    mkAutoFSM(//query cfg
+        seq
+            while(True)
+            seq
+                action
+                    let req<-axi4_slave_lite_rd.request.get();
+                    let sel=req.addr[11:8];
+                    let addr=req.addr[7:0];
+                    case (addr) matches
+                        8'h04: axi4_data_buf<=pkt_hdrs[sel].dst_mac[47:16];
+                        8'h08: axi4_data_buf<={16'h0, pkt_hdrs[sel].dst_mac[15:0]};
+
+                        8'h0c: axi4_data_buf<=pkt_hdrs[sel].src_mac[47:16];
+                        8'h10: axi4_data_buf<={16'h0, pkt_hdrs[sel].src_mac[15:0]};
+                        8'h14: axi4_data_buf<=pkt_hdrs[sel].dst_ip;
+                        8'h18: axi4_data_buf<=pkt_hdrs[sel].src_ip;
+                        8'h1c: axi4_data_buf<={16'h0, pkt_hdrs[sel].dst_port};
+                        8'h20: axi4_data_buf<={16'h0, pkt_hdrs[sel].src_port};
+                    endcase
+                endaction
+                axi4_slave_lite_rd.response.put(
+                    AXI4_Lite_Read_Rs_Pkg{
+                    resp: OKAY,
+                    data: axi4_data_buf
+                }
+                );
+            endseq
+        endseq
+    );
+
 
     
     
@@ -836,25 +924,38 @@ module mkRfdcPackerNCfg(RfdcPackerNCfg#(n));
         seq
             while(True)seq
                 await(!_configured);
+                noAction;
                 for(i<=0;i!=fromInteger(valueOf(n));i<=i+1)
                 seq
-                    config_packer(truncate(i), 8'h04, 32'h10_70_fd_b3);
-                    config_packer(truncate(i), 8'h08, 32'h00_00_68_de);
-                    config_packer(truncate(i), 8'h0c, 32'h10_70_fd_b3);
-                    config_packer(truncate(i), 8'h10, 32'h00_00_68_11);
+                    // config_packer(truncate(i), 8'h04, 32'h10_70_fd_b3);
+                    // config_packer(truncate(i), 8'h08, 32'h00_00_68_de);
+                    // config_packer(truncate(i), 8'h0c, 32'h10_70_fd_b3);
+                    // config_packer(truncate(i), 8'h10, 32'h00_00_68_11);
 
-                    config_packer(truncate(i), 8'h14, 32'h0a_64_0b_01);
-                    config_packer(truncate(i), 8'h18, 32'h0a_64_0b_10);
-                    config_packer(truncate(i), 8'h1c, {24'h00_00_11, i});
-                    config_packer(truncate(i), 8'h20, {24'h00_00_12, i});
+                    // config_packer(truncate(i), 8'h14, 32'h0a_64_0b_01);
+                    // config_packer(truncate(i), 8'h18, 32'h0a_64_0b_10);
+                    // config_packer(truncate(i), 8'h1c, {24'h00_00_11, i});
+                    // config_packer(truncate(i), 8'h20, {24'h00_00_12, i});
+                    config_packer(truncate(i), 8'h04, pkt_hdrs[i].dst_mac[47:16]);
+                    config_packer(truncate(i), 8'h08, {16'h00, pkt_hdrs[i].dst_mac[15:0]});
+                    config_packer(truncate(i), 8'h0c, pkt_hdrs[i].src_mac[47:16]);
+                    config_packer(truncate(i), 8'h10, {16'h00, pkt_hdrs[i].src_mac[15:0]});
+
+                    config_packer(truncate(i), 8'h14, pkt_hdrs[i].dst_ip);
+                    config_packer(truncate(i), 8'h18, pkt_hdrs[i].src_ip);
+                    config_packer(truncate(i), 8'h1c, {16'h00, pkt_hdrs[i].dst_port});
+                    config_packer(truncate(i), 8'h20, {16'h00, pkt_hdrs[i].src_port});
                 endseq
                 config_packer(0, 0, 32'h1);
             endseq
         endseq
     );
 
-    interface s_axi_wr_fab=axi4_lite_wr.fab;
-    interface s_axi_rd_fab=axi4_lite_rd.fab;
+    interface m_axi_wr_fab=axi4_master_lite_wr.fab;
+    interface m_axi_rd_fab=axi4_master_lite_rd.fab;
+
+    interface s_axi_wr_fab=axi4_slave_lite_wr.fab;
+    interface s_axi_rd_fab=axi4_slave_lite_rd.fab;
 
     method Action configured(Bool x);
         _configured<=x;
