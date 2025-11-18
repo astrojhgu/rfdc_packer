@@ -12,16 +12,14 @@ import BlueUtils::*;
 import StmtFSM::*;
 import Probe::*;
 
-typedef 64 AxisDataWidth;
-Integer axis_data_width=valueOf(AxisDataWidth);
 
 
-interface AXISGateN#(numeric type nports);
+interface AXISGateN#(numeric type nports, numeric type dw);
     (* prefix="s_axis" *)
-    interface Vector#(nports, AXI4_Stream_Rd_Fab#(AxisDataWidth, 0)) s_axis_fab;
+    interface Vector#(nports, AXI4_Stream_Rd_Fab#(dw, 0)) s_axis_fab;
 
     (* prefix="m_axis" *)
-    interface Vector#(nports, AXI4_Stream_Wr_Fab#(AxisDataWidth, 0)) m_axis_fab;
+    interface Vector#(nports, AXI4_Stream_Wr_Fab#(dw, 0)) m_axis_fab;
 
     (* always_enabled, always_ready *)
     method Action pps(Bit#(1) x);
@@ -39,23 +37,23 @@ interface AXISGateN#(numeric type nports);
     method Bool any_outgoing;
 endinterface
 
-module mkAXISGateN(AXISGateN#(n));
+module mkAXISGateN(AXISGateN#(n, dw));
     Reg#(Bit#(1)) _old_pps<-mkReg(0);
     Reg#(Bit#(1)) _pps<-mkReg(0);
     Wire#(Bool) _armed<-mkBypassWire;
     Reg#(Bool) _transmit<-mkReg(False);
 
-    Vector#(n, Reg#(AXI4_Stream_Pkg#(AxisDataWidth, 0))) fifos <- replicateM(mkReg(unpack(0)));
-    Vector#(n, AXI4_Stream_Wr#(AxisDataWidth, 0)) masters<-replicateM(mkAXI4_Stream_Wr(4));
-    Vector#(n, AXI4_Stream_Rd#(AxisDataWidth, 0)) slaves<-replicateM(mkAXI4_Stream_Rd(4));
+    Vector#(n, Reg#(AXI4_Stream_Pkg#(dw, 0))) fifos <- replicateM(mkReg(unpack(0)));
+    Vector#(n, AXI4_Stream_Wr#(dw, 0)) masters<-replicateM(mkAXI4_Stream_Wr(4));
+    Vector#(n, AXI4_Stream_Rd#(dw, 0)) slaves<-replicateM(mkAXI4_Stream_Rd(4));
     Wire#(Bool) incoming <- mkDWire(False);
     Wire#(Bool) outgoing <- mkDWire(False);
 
-    function AXI4_Stream_Rd_Fab#(AxisDataWidth, 0) extract_axis_rd_fab(AXI4_Stream_Rd#(AxisDataWidth,0) x);
+    function AXI4_Stream_Rd_Fab#(dw, 0) extract_axis_rd_fab(AXI4_Stream_Rd#(dw,0) x);
         return x.fab;
     endfunction
 
-    function AXI4_Stream_Wr_Fab#(AxisDataWidth, 0) extract_axis_wr_fab(AXI4_Stream_Wr#(AxisDataWidth,0) x);
+    function AXI4_Stream_Wr_Fab#(dw, 0) extract_axis_wr_fab(AXI4_Stream_Wr#(dw,0) x);
         return x.fab;
     endfunction
 
@@ -114,7 +112,14 @@ endmodule
 
 
 (*synthesize*)
-module mkAXISGate8(AXISGateN#(8));
-    AXISGateN#(8) gate<-mkAXISGateN;
+module mkAXISGate8(AXISGateN#(8, 64));
+    AXISGateN#(8, 64) gate<-mkAXISGateN;
+    return gate;
+endmodule
+
+
+(*synthesize*)
+module mkAXISGate4(AXISGateN#(4, 64));
+    AXISGateN#(4, 64) gate<-mkAXISGateN;
     return gate;
 endmodule

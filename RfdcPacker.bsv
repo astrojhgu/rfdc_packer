@@ -499,19 +499,33 @@ module mkRfdcPackerN(RfdcPackerN#(n));
     Clock current_clk<-exposeCurrentClock;
     Reset current_rst<-exposeCurrentReset;
     
-
+    Reg#(Bool) initialized<-mkReg(False);
     Vector#(n, RfdcPacker) packers<-genWithM(mkRfdcPacker);
     AXI4_Stream_Wr#(AxisDataWidth,0) m_axis <-mkAXI4_Stream_Wr(4);
     
     Reg#(UInt#(8)) input_idx<-mkReg(0);
 
-    rule each;
+    rule each(initialized);
         let d<-packers[input_idx].get.get();
         m_axis.pkg.put(d);
         if(d.last)begin
             if (input_idx==fromInteger(valueOf(n))-1) input_idx<=0;
             else input_idx<=input_idx+1;
         end
+    endrule
+
+    rule init(!initialized);
+        initialized<=True;
+        m_axis.pkg.put(
+        AXI4_Stream_Pkg{
+                data: 512'h0,
+                user: 0, 
+                keep: 64'hffff_ffff_ffff_ffff,
+                dest: 0,
+                id: 0,
+                last: True
+            }
+        );
     endrule
 
     function PktHdrCfgee extract_cfg(RfdcPacker x);
@@ -683,5 +697,17 @@ endmodule
 (*synthesize*)
 module mkRfdcPacker8(RfdcPackerN#(8));
     RfdcPackerN#(8) packer <- mkRfdcPackerN;
+    return packer;
+endmodule
+
+(*synthesize*)
+module mkRfdcPacker4Cfg(RfdcPackerNCfg#(4));
+    RfdcPackerNCfg#(4) cfg<-mkRfdcPackerNCfg;
+    return cfg;
+endmodule
+
+(*synthesize*)
+module mkRfdcPacker4(RfdcPackerN#(4));
+    RfdcPackerN#(4) packer <- mkRfdcPackerN;
     return packer;
 endmodule
